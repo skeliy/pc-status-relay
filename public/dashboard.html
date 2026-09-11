@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC ステータス</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --text: #1c1e21;
+    --text-dim: #6b7280;
+    --border: #e5e7eb;
+    --online: #22c55e;
+    --offline: #9ca3af;
+    --afk: #f59e0b;
+    --custom: #8b5cf6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card-bg: #212429;
+      --text: #f2f3f5;
+      --text-dim: #9aa0a8;
+      --border: #33363c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  h1 { font-size: 1.4rem; margin: 0; }
+  #meta { font-size: 0.8rem; color: var(--text-dim); }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    min-width: 0;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--offline);
+    flex-shrink: 0;
+  }
+  .dot.online { background: var(--online); }
+  .label {
+    font-weight: 600; font-size: 1rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .status-line {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .status-text { font-size: 1.25rem; font-weight: 600; overflow-wrap: anywhere; }
+  .badge {
+    font-size: 0.7rem; font-weight: 700;
+    padding: 2px 8px; border-radius: 999px;
+    letter-spacing: 0.05em; flex-shrink: 0;
+    color: #1c1e21;
+  }
+  .badge.afk { background: var(--afk); }
+  .badge.custom { background: var(--custom); color: #fff; }
+  .sub {
+    font-size: 0.8rem; color: var(--text-dim);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .last-seen { margin-top: 10px; font-size: 0.75rem; color: var(--text-dim); }
+  .offline-note { color: var(--offline); font-size: 0.95rem; }
+  #error-banner {
+    display: none;
+    background: #fee2e2; color: #991b1b;
+    border-radius: 10px; padding: 10px 14px;
+    font-size: 0.85rem; margin-bottom: 16px;
+  }
+  #empty-state {
+    display: none;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>PC ステータス</h1>
+    <div id="meta">更新中...</div>
+  </header>
+
+  <div id="error-banner"></div>
+  <div id="empty-state">まだ誰も接続していません。エージェント(agent.py)を起動しているPCが現れると、ここに表示されます。</div>
+
+  <div class="cards" id="cards"></div>
+</div>
+
+<script>
+// このページはリレーサーバー自身から配信されるため、設定ファイルの編集は不要です。
+// 表示に使う閲覧用トークンは、このページを開いたURLの ?token=... からそのまま引き継ぎます。
+
+const POLL_INTERVAL_MS = 5000;
+
+const params = new URLSearchParams(window.location.search);
+const TOKEN = params.get('token') || '';
+
+const cardsEl = document.getElementById('cards');
+const metaEl = document.getElementById('meta');
+const errorBanner = document.getElementById('error-banner');
+const emptyState = document.getElementById('empty-state');
+
+function showError(msg) {
+  errorBanner.style.display = 'block';
+  errorBanner.textContent = msg;
+}
+function hideError() {
+  errorBanner.style.display = 'none';
+}
+
+function badgeHtml(s) {
+  if (!s || !s.online) return '';
+  if (s.isCustom) {
+    const remain = typeof s.customRemainingSeconds === 'number'
+      ? ` (あと${Math.max(0, Math.ceil(s.customRemainingSeconds / 60))}分)`
+      : '';
+    return `<span class="badge custom">カスタム${remain}</span>`;
+  }
+  if (s.isAfk) {
+    return `<span class="badge afk">離席中</span>`;
+  }
+  return '';
+}
+
+function renderCard(id, s) {
+  const online = !!(s && s.online);
+  const label = (s && s.label) || id;
+  const sub = s && s.processName ? s.processName : '';
+  const lastSeen = s && typeof s.lastSeenSecondsAgo === 'number'
+    ? `最終更新: ${s.lastSeenSecondsAgo}秒前`
+    : '';
+
+  const dotCls = online ? 'dot online' : 'dot';
+  const mainText = !s
+    ? '未接続'
+    : (!s.online ? 'オフライン' : (s.isAfk && !s.isCustom ? 'AFK' : (s.status || '不明')));
+  const mainCls = !s || !s.online ? 'status-text offline-note' : 'status-text';
+
+  return `
+    <div class="card">
+      <div class="card-head">
+        <span class="${dotCls}"></span>
+        <span class="label">${escapeHtml(label)}</span>
+      </div>
+      <div class="status-line">
+        <span class="${mainCls}">${escapeHtml(mainText)}</span>
+        ${badgeHtml(s)}
+      </div>
+      <div class="sub">${escapeHtml(sub)}</div>
+      <div class="last-seen">${escapeHtml(lastSeen)}</div>
+    </div>
+  `;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+function render(data) {
+  const pcs = (data && data.pcs) || {};
+  const order = (data && data.order) || Object.keys(pcs);
+  const ids = order.filter((id) => Object.prototype.hasOwnProperty.call(pcs, id));
+  for (const id of Object.keys(pcs)) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+
+  if (ids.length === 0) {
+    emptyState.style.display = 'block';
+    cardsEl.innerHTML = '';
+    return;
+  }
+  emptyState.style.display = 'none';
+  cardsEl.innerHTML = ids.map((id) => renderCard(id, pcs[id])).join('');
+}
+
+async function poll() {
+  try {
+    const url = new URL('/api/status', window.location.origin);
+    if (TOKEN) url.searchParams.set('token', TOKEN);
+    const res = await fetch(url.toString(), { cache: 'no-store' });
+    if (!res.ok) {
+      showError(`サーバーからエラーが返されました (HTTP ${res.status})。URLの ?token=... が正しいか確認してください。`);
+      metaEl.textContent = 'エラー';
+      return;
+    }
+    hideError();
+    const data = await res.json();
+    render(data);
+    metaEl.textContent = '最終取得: ' + new Date().toLocaleTimeString('ja-JP');
+  } catch (e) {
+    showError(`サーバーに接続できません: ${e.message}`);
+    metaEl.textContent = '接続エラー';
+  }
+}
+
+poll();
+setInterval(poll, POLL_INTERVAL_MS);
+</script>
+</body>
+</html>

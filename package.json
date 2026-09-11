@@ -1,0 +1,13 @@
+{
+  "name": "pc-status-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "友達のPCの現在の状態(起動中のアプリ/ゲーム、AFK判定)を中継する小さなHTTPサーバー",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
