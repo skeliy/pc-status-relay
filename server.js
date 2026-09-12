@@ -189,6 +189,7 @@ const server = http.createServer((req, res) => {
         customRemainingSeconds:
           typeof data.customRemainingSeconds === 'number' ? data.customRemainingSeconds : null,
         idleSeconds: typeof data.idleSeconds === 'number' ? data.idleSeconds : null,
+        durationSeconds: typeof data.durationSeconds === 'number' ? data.durationSeconds : null,
         lastSeen: Date.now(),
       };
       sendJson(res, 200, { ok: true });
