@@ -8,21 +8,28 @@
 //   - 状態が変わるたびに履歴(いつ何をしていたか)も記録し、
 //     GET /api/history で「過去○日間、何にどれくらいの時間を使ったか」の集計を返す
 //   - GET /history で、その履歴をスマホでも読みやすい簡易ページとして配信する
+//     -> この履歴機能は OWNER_TOKEN を知っている人(自分だけ)専用。
+//        VIEW_TOKEN(友達にも共有する閲覧用トークン)では見られないし、
+//        ダッシュボード上にも「履歴」へのリンクは一切表示されない(自分のトークンで開いた時だけ出る)。
 //
 // 外部ライブラリ不使用(Node.js標準の http / fs モジュールのみ)。
 //
 // 環境変数:
 //   PORT                   待受ポート (デフォルト 3000。ホスティング側が自動設定する場合はそれが優先されます)
-//   WRITE_TOKEN             エージェント(agent.py)が状態を書き込むための合言葉。必ず変更してください
-//   VIEW_TOKEN              ダッシュボードを見るための合言葉。友達を含め「見る人全員」に共有してOK
-//   OFFLINE_THRESHOLD_MS    この時間以上更新が無いPCは「オフライン」とみなす(デフォルト 30000 = 30秒)
-//   MAX_PCS                 登録できるPCの最大台数(デフォルト 10。荒らし対策の簡易上限)
-//   HISTORY_RETENTION_DAYS  履歴を何日分まで保持するか(デフォルト 7)
-//   HISTORY_MAX_SEGMENTS    PC1台あたり保持する履歴の最大件数(デフォルト 5000。メモリ保護用の簡易上限)
+//   WRITE_TOKEN            エージェント(agent.py)が状態を書き込むための合言葉。必ず変更してください
+//   VIEW_TOKEN             ダッシュボードを見るための合言葉。友達を含め「見る人全員」に共有してOK
+//   OWNER_TOKEN            自分専用の合言葉。履歴機能(/history, /api/history)はこれが無いと
+//                          絶対に見られない。VIEW_TOKENとは別の値にして、誰にも共有しないこと。
+//                          未設定の場合、履歴機能は誰からも使えない(安全側に倒して無効化)。
+//   OFFLINE_THRESHOLD_MS   この時間以上更新が無いPCは「オフライン」とみなす(デフォルト 30000 = 30秒)
+//   MAX_PCS                登録できるPCの最大台数(デフォルト 10。荒らし対策の簡易上限)
+//   HISTORY_RETENTION_DAYS 履歴を何日分まで保持するか(デフォルト 7)
+//   HISTORY_MAX_SEGMENTS   PC1台あたり保持する履歴の最大件数(デフォルト 5000。メモリ保護用の簡易上限)
 //
 // WRITE_TOKEN と VIEW_TOKEN を分けている理由:
 //   VIEW_TOKENは友達にも共有する前提なので、万一漏れても「なりすまして状態を書き込まれる」
 //   ことがないよう、書き込み(POST)には別の・より秘密度の高いWRITE_TOKENを使う。
+//   OWNER_TOKENはさらにその上で、「友達には見せたくない機能」専用の第三のトークンという位置づけ。
 //
 // 履歴機能についての注意:
 //   履歴もステータスと同じくメモリ上にのみ保持しています(ファイルやDBへの保存はしていません)。
@@ -37,6 +44,7 @@ const { URL } = require('url');
 const PORT = process.env.PORT || 3000;
 const WRITE_TOKEN = process.env.WRITE_TOKEN || '';
 const VIEW_TOKEN = process.env.VIEW_TOKEN || '';
+const OWNER_TOKEN = process.env.OWNER_TOKEN || '';
 const OFFLINE_THRESHOLD_MS = parseInt(process.env.OFFLINE_THRESHOLD_MS || '30000', 10);
 const MAX_PCS = parseInt(process.env.MAX_PCS || '10', 10);
 const HISTORY_RETENTION_DAYS = parseFloat(process.env.HISTORY_RETENTION_DAYS || '7');
@@ -52,6 +60,36 @@ if (!WRITE_TOKEN) {
 if (!VIEW_TOKEN) {
   console.warn('[警告] VIEW_TOKEN が未設定です。誰でもダッシュボードを閲覧できてしまいます。必ず設定してください。');
 }
+if (!OWNER_TOKEN) {
+  console.warn('[警告] OWNER_TOKEN が未設定です。履歴機能(/history, /api/history)は誰からも使えません(安全側で無効)。自分だけが使えるようにするには設定してください。');
+}
+
+// 履歴機能のリンクをダッシュボードに注入する際、HTMLにそのまま挿し込む断片。
+// このテキスト自体はOWNER_TOKENを一切含まないので、仕組みを覗かれても悪用はできない。
+const OWNER_DASHBOARD_INJECTION = `
+<script>
+(function () {
+  var TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+  var style = document.createElement('style');
+  style.textContent = '.history-link{display:inline-block;margin-top:12px;font-size:.8rem;color:#4f7cff;text-decoration:none;}';
+  document.head.appendChild(style);
+  function addLinks() {
+    document.querySelectorAll('.card[data-pc-id]').forEach(function (card) {
+      if (card.querySelector('.history-link')) return;
+      var id = card.getAttribute('data-pc-id');
+      var a = document.createElement('a');
+      a.className = 'history-link';
+      a.href = '/history?id=' + encodeURIComponent(id) + (TOKEN ? '&token=' + encodeURIComponent(TOKEN) : '');
+      a.textContent = '履歴を見る(過去7日間)→';
+      card.appendChild(a);
+    });
+  }
+  var target = document.getElementById('cards');
+  if (target) new MutationObserver(addLinks).observe(target, { childList: true, subtree: true });
+  addLinks();
+})();
+</script>
+`;
 
 // PCごとの最新状態を保持するだけのシンプルなインメモリストア。
 // サーバーを再起動すると消えます(このユースケースでは永続化は不要という判断)。
@@ -108,7 +146,16 @@ function isWriteAuthorized(req) {
 
 function isViewAuthorized(req, parsedUrl) {
   if (!VIEW_TOKEN) return true; // 未設定時は素通し(起動時に警告済み)
-  return tokenFrom(req, parsedUrl) === VIEW_TOKEN;
+  const t = tokenFrom(req, parsedUrl);
+  // OWNER_TOKENでも通常のダッシュボード/ステータスは見られる(自分は当然見られて良いので)。
+  return t === VIEW_TOKEN || (!!OWNER_TOKEN && t === OWNER_TOKEN);
+}
+
+// 履歴機能(/history, /api/history)専用。VIEW_TOKENでは通さない — OWNER_TOKENのみ。
+// OWNER_TOKEN が未設定の場合は、安全側に倒して誰からも使えないようにする。
+function isOwnerAuthorized(req, parsedUrl) {
+  if (!OWNER_TOKEN) return false;
+  return tokenFrom(req, parsedUrl) === OWNER_TOKEN;
 }
 
 function readJsonBody(req, maxBytes, cb) {
@@ -272,14 +319,21 @@ const server = http.createServer((req, res) => {
         sendPlain(res, 500, 'dashboard.html not found on server');
         return;
       }
-      sendHtml(res, 200, html);
+      // 自分専用のOWNER_TOKENで開いた時だけ、履歴へのリンクをその場で挿し込む。
+      // 友達が使うVIEW_TOKENでは何も挿し込まれないので、履歴機能の存在自体が見えない。
+      const html2 = isOwnerAuthorized(req, parsedUrl)
+        ? html.replace('</body>', `${OWNER_DASHBOARD_INJECTION}</body>`)
+        : html;
+      sendHtml(res, 200, html2);
     });
     return;
   }
 
   if (pathname === '/history' && req.method === 'GET') {
-    if (!isViewAuthorized(req, parsedUrl)) {
-      sendPlain(res, 401, 'unauthorized (URLの末尾に ?token=閲覧用トークン を付けてください)');
+    if (!isOwnerAuthorized(req, parsedUrl)) {
+      // あえて401ではなく404(そんなページは無い、という応答)にしている。
+      // 友達がこのURLに気づいて開いてしまっても、「履歴ページが存在する」ことすら伝えないため。
+      sendJson(res, 404, { error: 'not found' });
       return;
     }
     fs.readFile(HISTORY_HTML_PATH, 'utf8', (err, html) => {
@@ -343,8 +397,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (pathname === '/api/history' && req.method === 'GET') {
-    if (!isViewAuthorized(req, parsedUrl)) {
-      sendJson(res, 401, { error: 'unauthorized' });
+    if (!isOwnerAuthorized(req, parsedUrl)) {
+      // /history と同じ理由で404にしている(存在自体を伝えない)。
+      sendJson(res, 404, { error: 'not found' });
       return;
     }
     const id = (parsedUrl.searchParams.get('id') || '').trim();
