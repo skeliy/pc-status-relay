@@ -5,19 +5,29 @@
 //   - GET /api/status で全PCの最新状態をJSONで返す
 //   - GET /dashboard でダッシュボード画面(HTML)そのものを配信する
 //     -> みんなが同じURL(+閲覧用トークン)を開くだけで、同じ画面を見られる
+//   - 状態が変わるたびに履歴(いつ何をしていたか)も記録し、
+//     GET /api/history で「過去○日間、何にどれくらいの時間を使ったか」の集計を返す
+//   - GET /history で、その履歴をスマホでも読みやすい簡易ページとして配信する
 //
 // 外部ライブラリ不使用(Node.js標準の http / fs モジュールのみ)。
 //
 // 環境変数:
-//   PORT                 待受ポート (デフォルト 3000。ホスティング側が自動設定する場合はそれが優先されます)
-//   WRITE_TOKEN           エージェント(agent.py)が状態を書き込むための合言葉。必ず変更してください
-//   VIEW_TOKEN            ダッシュボードを見るための合言葉。友達を含め「見る人全員」に共有してOK
-//   OFFLINE_THRESHOLD_MS  この時間以上更新が無いPCは「オフライン」とみなす(デフォルト 30000 = 30秒)
-//   MAX_PCS               登録できるPCの最大台数(デフォルト 10。荒らし対策の簡易上限)
+//   PORT                   待受ポート (デフォルト 3000。ホスティング側が自動設定する場合はそれが優先されます)
+//   WRITE_TOKEN             エージェント(agent.py)が状態を書き込むための合言葉。必ず変更してください
+//   VIEW_TOKEN              ダッシュボードを見るための合言葉。友達を含め「見る人全員」に共有してOK
+//   OFFLINE_THRESHOLD_MS    この時間以上更新が無いPCは「オフライン」とみなす(デフォルト 30000 = 30秒)
+//   MAX_PCS                 登録できるPCの最大台数(デフォルト 10。荒らし対策の簡易上限)
+//   HISTORY_RETENTION_DAYS  履歴を何日分まで保持するか(デフォルト 7)
+//   HISTORY_MAX_SEGMENTS    PC1台あたり保持する履歴の最大件数(デフォルト 5000。メモリ保護用の簡易上限)
 //
 // WRITE_TOKEN と VIEW_TOKEN を分けている理由:
 //   VIEW_TOKENは友達にも共有する前提なので、万一漏れても「なりすまして状態を書き込まれる」
 //   ことがないよう、書き込み(POST)には別の・より秘密度の高いWRITE_TOKENを使う。
+//
+// 履歴機能についての注意:
+//   履歴もステータスと同じくメモリ上にのみ保持しています(ファイルやDBへの保存はしていません)。
+//   そのためサーバーが再起動(Renderの無料プランでは再デプロイ時など)すると、その時点までの
+//   履歴は消えてしまいます。日々の大まかな傾向を見るための簡易機能という位置づけです。
 
 const http = require('http');
 const fs = require('fs');
@@ -29,8 +39,12 @@ const WRITE_TOKEN = process.env.WRITE_TOKEN || '';
 const VIEW_TOKEN = process.env.VIEW_TOKEN || '';
 const OFFLINE_THRESHOLD_MS = parseInt(process.env.OFFLINE_THRESHOLD_MS || '30000', 10);
 const MAX_PCS = parseInt(process.env.MAX_PCS || '10', 10);
+const HISTORY_RETENTION_DAYS = parseFloat(process.env.HISTORY_RETENTION_DAYS || '7');
+const HISTORY_RETENTION_MS = HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const HISTORY_MAX_SEGMENTS = parseInt(process.env.HISTORY_MAX_SEGMENTS || '5000', 10);
 
 const DASHBOARD_HTML_PATH = path.join(__dirname, 'public', 'dashboard.html');
+const HISTORY_HTML_PATH = path.join(__dirname, 'public', 'history.html');
 
 if (!WRITE_TOKEN) {
   console.warn('[警告] WRITE_TOKEN が未設定です。誰でも状態を書き込めてしまいます。必ず設定してください。');
@@ -44,6 +58,14 @@ if (!VIEW_TOKEN) {
 const state = Object.create(null);
 // PCが最初に報告してきた順序を覚えておく(ダッシュボードの表示順を安定させるため)
 const firstSeenOrder = [];
+
+// PCごとの履歴(状態が変わった区間のリスト)。
+// 各要素: { key, kind, label, startedAt, endedAt }
+//   key:   区間を識別するためのキー ("app:chrome.exe" / "afk" / "custom:お風呂中" など)
+//   kind:  "app" | "afk" | "custom"
+//   label: 画面表示用の名前(アプリ名 / "AFK" / カスタムステータス文)
+// 一番最後の要素が「今も続いている区間」で、POSTが来るたびに endedAt を伸ばしていく。
+const history = Object.create(null);
 
 function sendJson(res, statusCode, obj) {
   const body = JSON.stringify(obj);
@@ -123,6 +145,103 @@ function buildStatusSnapshot() {
   return { pcs, order: firstSeenOrder.slice(), serverTime: now };
 }
 
+// data(POSTされてきた内容)から履歴区間のキー・種別・表示名を決める。
+// ダッシュボード側の表示ロジック(isAfk && !isCustom -> AFK表示 など)と揃えてある。
+function segmentInfoFrom(data) {
+  if (data.isCustom) {
+    const label = typeof data.status === 'string' && data.status ? data.status : 'カスタム';
+    return { key: `custom:${label}`, kind: 'custom', label };
+  }
+  if (data.isAfk) {
+    return { key: 'afk', kind: 'afk', label: 'AFK' };
+  }
+  const label =
+    (typeof data.processName === 'string' && data.processName) ||
+    (typeof data.status === 'string' && data.status) ||
+    '不明';
+  return { key: `app:${label}`, kind: 'app', label };
+}
+
+// 履歴に1件分の更新を反映する。状態が変わっていなければ現在の区間を延長するだけ、
+// 変わっていれば新しい区間を開始する。古くなった区間・件数が多すぎる分は切り詰める。
+function recordHistory(id, data, now) {
+  if (!history[id]) history[id] = [];
+  const segments = history[id];
+  const info = segmentInfoFrom(data);
+  const last = segments[segments.length - 1];
+
+  if (last && last.key === info.key) {
+    last.endedAt = now;
+  } else {
+    // 状態が切り替わったので、直前の区間はこの瞬間までだったものとして確定させる。
+    if (last) last.endedAt = now;
+    segments.push({ key: info.key, kind: info.kind, label: info.label, startedAt: now, endedAt: now });
+  }
+
+  const cutoff = now - HISTORY_RETENTION_MS;
+  while (segments.length > 0 && segments[0].endedAt < cutoff) {
+    segments.shift();
+  }
+  while (segments.length > HISTORY_MAX_SEGMENTS) {
+    segments.shift();
+  }
+}
+
+// 指定PC・指定期間(windowStart〜now)の履歴を、キーごとの合計時間に集計する。
+function buildHistorySummary(id, windowDays) {
+  const now = Date.now();
+  const windowMs = Math.min(windowDays, HISTORY_RETENTION_DAYS) * 24 * 60 * 60 * 1000;
+  const windowStart = now - windowMs;
+  const segments = history[id] || [];
+
+  const isOnline = !!(state[id] && now - state[id].lastSeen <= OFFLINE_THRESHOLD_MS);
+
+  const totalsByKey = new Map();
+  let trackedMs = 0;
+  let afkMs = 0;
+  let customMs = 0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const isLast = i === segments.length - 1;
+    // 一番最後の区間は「今も続いている最中」の可能性があるので、
+    // PCがオンラインである限りは現在時刻まで継続しているものとして数える。
+    const effectiveEndedAt = isLast && isOnline ? now : seg.endedAt;
+    const start = Math.max(seg.startedAt, windowStart);
+    const end = Math.max(effectiveEndedAt, start);
+    if (end <= windowStart) continue;
+    const durationMs = end - start;
+    if (durationMs <= 0) continue;
+
+    trackedMs += durationMs;
+    if (seg.kind === 'afk') afkMs += durationMs;
+    if (seg.kind === 'custom') customMs += durationMs;
+
+    const existing = totalsByKey.get(seg.key);
+    if (existing) {
+      existing.durationMs += durationMs;
+    } else {
+      totalsByKey.set(seg.key, { key: seg.key, kind: seg.kind, label: seg.label, durationMs });
+    }
+  }
+
+  const breakdown = Array.from(totalsByKey.values()).sort((a, b) => b.durationMs - a.durationMs);
+
+  return {
+    id,
+    label: (state[id] && state[id].label) || id,
+    online: !!(state[id] && now - state[id].lastSeen <= OFFLINE_THRESHOLD_MS),
+    windowDays,
+    windowStart,
+    windowEnd: now,
+    trackedMs,
+    afkMs,
+    customMs,
+    breakdown,
+    serverTime: now,
+  };
+}
+
 const server = http.createServer((req, res) => {
   let parsedUrl;
   try {
@@ -158,6 +277,21 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/history' && req.method === 'GET') {
+    if (!isViewAuthorized(req, parsedUrl)) {
+      sendPlain(res, 401, 'unauthorized (URLの末尾に ?token=閲覧用トークン を付けてください)');
+      return;
+    }
+    fs.readFile(HISTORY_HTML_PATH, 'utf8', (err, html) => {
+      if (err) {
+        sendPlain(res, 500, 'history.html not found on server');
+        return;
+      }
+      sendHtml(res, 200, html);
+    });
+    return;
+  }
+
   if (pathname === '/api/status' && req.method === 'POST') {
     if (!isWriteAuthorized(req)) {
       sendJson(res, 401, { error: 'unauthorized' });
@@ -180,6 +314,7 @@ const server = http.createServer((req, res) => {
       if (!Object.prototype.hasOwnProperty.call(state, id)) {
         firstSeenOrder.push(id);
       }
+      const now = Date.now();
       state[id] = {
         label: typeof data.label === 'string' && data.label ? data.label : id,
         status: typeof data.status === 'string' && data.status ? data.status : '不明',
@@ -190,8 +325,9 @@ const server = http.createServer((req, res) => {
           typeof data.customRemainingSeconds === 'number' ? data.customRemainingSeconds : null,
         idleSeconds: typeof data.idleSeconds === 'number' ? data.idleSeconds : null,
         durationSeconds: typeof data.durationSeconds === 'number' ? data.durationSeconds : null,
-        lastSeen: Date.now(),
+        lastSeen: now,
       };
+      recordHistory(id, data, now);
       sendJson(res, 200, { ok: true });
     });
     return;
@@ -203,6 +339,23 @@ const server = http.createServer((req, res) => {
       return;
     }
     sendJson(res, 200, buildStatusSnapshot());
+    return;
+  }
+
+  if (pathname === '/api/history' && req.method === 'GET') {
+    if (!isViewAuthorized(req, parsedUrl)) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    const id = (parsedUrl.searchParams.get('id') || '').trim();
+    if (!id) {
+      sendJson(res, 400, { error: 'missing "id" query parameter' });
+      return;
+    }
+    let days = parseFloat(parsedUrl.searchParams.get('days') || '7');
+    if (!Number.isFinite(days) || days <= 0) days = 7;
+    days = Math.min(days, HISTORY_RETENTION_DAYS);
+    sendJson(res, 200, buildHistorySummary(id, days));
     return;
   }
 
