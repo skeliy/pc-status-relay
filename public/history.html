@@ -142,6 +142,45 @@
   .row.kind-afk .bar-fill { background: var(--afk); }
   .row.kind-custom .bar-fill { background: var(--custom); }
 
+  .detail-toggle {
+    display: inline-block;
+    margin-top: 8px;
+    font-size: 0.75rem;
+    color: var(--accent);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .detail-panel {
+    display: none;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+  .detail-panel.open { display: block; }
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    padding: 4px 0;
+  }
+  .detail-row .t {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .detail-row .d {
+    flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .detail-empty {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+
   #error-banner {
     display: none;
     background: #fee2e2; color: #991b1b;
@@ -277,6 +316,7 @@ function render(data) {
   breakdownEl.innerHTML = breakdown
     .map((b) => {
       const pct = Math.max(2, Math.round((b.durationMs / maxMs) * 100));
+      const canDrillDown = b.kind === 'app';
       return `
         <div class="row ${kindClass(b.kind)}">
           <div class="row-top">
@@ -284,11 +324,93 @@ function render(data) {
             <span class="row-time">${formatDuration(b.durationMs)}</span>
           </div>
           <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+          ${canDrillDown ? `<button type="button" class="detail-toggle" data-key="${escapeHtml(b.key)}">詳細を見る(何を見ていたか)</button>
+          <div class="detail-panel" data-key="${escapeHtml(b.key)}"></div>` : ''}
         </div>
       `;
     })
     .join('');
+
+  restoreOpenDetails();
 }
+
+// 「詳細を見る」で開いたままのアプリのキー一覧。30秒ごとの再取得でも開いた状態を保つ。
+const openDetailKeys = new Set();
+
+function detailPanelFor(key) {
+  return breakdownEl.querySelector(`.detail-panel[data-key="${cssEscape(key)}"]`);
+}
+function toggleButtonFor(key) {
+  return breakdownEl.querySelector(`.detail-toggle[data-key="${cssEscape(key)}"]`);
+}
+function cssEscape(s) {
+  return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&');
+}
+
+async function loadDetail(key) {
+  const panel = detailPanelFor(key);
+  if (!panel) return;
+  panel.innerHTML = '<div class="detail-empty">読み込み中...</div>';
+  try {
+    const url = new URL('/api/history/detail', window.location.origin);
+    url.searchParams.set('id', PC_ID);
+    url.searchParams.set('key', key);
+    url.searchParams.set('days', String(currentDays));
+    if (TOKEN) url.searchParams.set('token', TOKEN);
+    const res = await fetch(url.toString(), { cache: 'no-store' });
+    if (!res.ok) {
+      panel.innerHTML = `<div class="detail-empty">読み込みに失敗しました (HTTP ${res.status})</div>`;
+      return;
+    }
+    const data = await res.json();
+    const items = data.breakdown || [];
+    if (items.length === 0) {
+      panel.innerHTML = '<div class="detail-empty">この期間の詳細はまだありません。</div>';
+      return;
+    }
+    panel.innerHTML = items
+      .map(
+        (it) => `
+        <div class="detail-row">
+          <span class="t">${escapeHtml(it.title)}</span>
+          <span class="d">${formatDuration(it.durationMs)}</span>
+        </div>
+      `
+      )
+      .join('');
+  } catch (e) {
+    panel.innerHTML = `<div class="detail-empty">読み込みに失敗しました: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function restoreOpenDetails() {
+  for (const key of openDetailKeys) {
+    const panel = detailPanelFor(key);
+    const btn = toggleButtonFor(key);
+    if (!panel || !btn) continue; // この期間の集計にそのアプリが無くなった場合
+    panel.classList.add('open');
+    btn.textContent = '詳細を閉じる';
+    loadDetail(key);
+  }
+}
+
+breakdownEl.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.detail-toggle');
+  if (!btn) return;
+  const key = btn.dataset.key;
+  const panel = detailPanelFor(key);
+  if (!panel) return;
+  if (openDetailKeys.has(key)) {
+    openDetailKeys.delete(key);
+    panel.classList.remove('open');
+    btn.textContent = '詳細を見る(何を見ていたか)';
+  } else {
+    openDetailKeys.add(key);
+    panel.classList.add('open');
+    btn.textContent = '詳細を閉じる';
+    loadDetail(key);
+  }
+});
 
 async function poll() {
   if (!PC_ID) {
