@@ -92,6 +92,13 @@
   }
   .duration { margin-top: 8px; font-size: 0.8rem; color: var(--text-dim); }
   .last-seen { margin-top: 4px; font-size: 0.75rem; color: var(--text-dim); }
+  .history-link {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 0.8rem;
+    color: #4f7cff;
+    text-decoration: none;
+  }
   .offline-note { color: var(--offline); font-size: 0.95rem; }
   #error-banner {
     display: none;
@@ -200,8 +207,16 @@ function renderCard(id, s) {
       <div class="sub">${escapeHtml(sub)}</div>
       ${durationText ? `<div class="duration">${escapeHtml(durationLabel)}: ${escapeHtml(durationText)}</div>` : ''}
       <div class="last-seen">${escapeHtml(lastSeen)}</div>
+      <a class="history-link" href="${historyUrl(id)}">履歴を見る(過去7日間)→</a>
     </div>
   `;
+}
+
+function historyUrl(id) {
+  const url = new URL('/history', window.location.origin);
+  url.searchParams.set('id', id);
+  if (TOKEN) url.searchParams.set('token', TOKEN);
+  return url.toString();
 }
 
 function escapeHtml(str) {
