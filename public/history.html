@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>アクティビティ履歴</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --text: #1c1e21;
+    --text-dim: #6b7280;
+    --border: #e5e7eb;
+    --online: #22c55e;
+    --offline: #9ca3af;
+    --afk: #f59e0b;
+    --custom: #8b5cf6;
+    --app: #4f7cff;
+    --accent: #4f7cff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card-bg: #212429;
+      --text: #f2f3f5;
+      --text-dim: #9aa0a8;
+      --border: #33363c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 14px 40px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  header {
+    margin-bottom: 16px;
+  }
+  .back-link {
+    display: inline-block;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-size: 1.3rem;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--offline); flex-shrink: 0; }
+  .dot.online { background: var(--online); }
+  #meta { font-size: 0.78rem; color: var(--text-dim); }
+
+  .range-tabs {
+    display: flex;
+    gap: 6px;
+    margin: 14px 0 16px;
+  }
+  .range-tabs button {
+    flex: 1;
+    padding: 8px 0;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .range-tabs button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .summary .tile {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .summary .tile .num { font-size: 1.1rem; font-weight: 700; }
+  .summary .tile .cap { font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; }
+
+  .section-title {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin: 4px 2px 8px;
+  }
+
+  .row {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+  }
+  .row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .row-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-time {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .bar-track {
+    height: 7px;
+    border-radius: 999px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--app);
+  }
+  .row.kind-afk .bar-fill { background: var(--afk); }
+  .row.kind-custom .bar-fill { background: var(--custom); }
+
+  #error-banner {
+    display: none;
+    background: #fee2e2; color: #991b1b;
+    border-radius: 10px; padding: 10px 14px;
+    font-size: 0.85rem; margin-bottom: 16px;
+  }
+  #empty-state {
+    display: none;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="back-link" id="back-link" href="/dashboard">← ダッシュボードに戻る</a>
+    <h1><span class="dot" id="status-dot"></span><span id="pc-label">読み込み中...</span></h1>
+    <div id="meta">読み込み中...</div>
+  </header>
+
+  <div id="error-banner"></div>
+
+  <div class="range-tabs" id="range-tabs">
+    <button data-days="1">今日</button>
+    <button data-days="3">3日間</button>
+    <button data-days="7">7日間</button>
+  </div>
+
+  <div class="summary">
+    <div class="tile">
+      <div class="num" id="tracked-total">-</div>
+      <div class="cap">記録された稼働時間</div>
+    </div>
+    <div class="tile">
+      <div class="num" id="afk-total">-</div>
+      <div class="cap">離席(AFK)時間</div>
+    </div>
+  </div>
+
+  <div id="empty-state">この期間の記録がまだありません。サーバーが再起動されると、それ以前の履歴は失われます。</div>
+
+  <div class="section-title">アプリ・ステータスごとの使用時間(多い順)</div>
+  <div id="breakdown"></div>
+</div>
+
+<script>
+// このページはリレーサーバー自身から配信されるため、設定ファイルの編集は不要です。
+// 表示に使う閲覧用トークン・PC IDは、このページを開いたURLの ?token=...&id=... からそのまま引き継ぎます。
+
+const POLL_INTERVAL_MS = 30000;
+
+const params = new URLSearchParams(window.location.search);
+const TOKEN = params.get('token') || '';
+const PC_ID = params.get('id') || '';
+
+let currentDays = parseInt(params.get('days') || '7', 10);
+if (![1, 3, 7].includes(currentDays)) currentDays = 7;
+
+document.getElementById('back-link').href = TOKEN ? `/dashboard?token=${encodeURIComponent(TOKEN)}` : '/dashboard';
+
+const metaEl = document.getElementById('meta');
+const errorBanner = document.getElementById('error-banner');
+const emptyState = document.getElementById('empty-state');
+const breakdownEl = document.getElementById('breakdown');
+const pcLabelEl = document.getElementById('pc-label');
+const statusDotEl = document.getElementById('status-dot');
+const trackedTotalEl = document.getElementById('tracked-total');
+const afkTotalEl = document.getElementById('afk-total');
+const tabsEl = document.getElementById('range-tabs');
+
+function showError(msg) {
+  errorBanner.style.display = 'block';
+  errorBanner.textContent = msg;
+}
+function hideError() {
+  errorBanner.style.display = 'none';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+function formatDuration(ms) {
+  if (typeof ms !== 'number' || ms < 0) return '0分';
+  const totalMinutes = Math.round(ms / 60000);
+  if (totalMinutes < 1) return '1分未満';
+  if (totalMinutes < 60) return `${totalMinutes}分`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}時間${minutes}分` : `${hours}時間`;
+}
+
+function kindClass(kind) {
+  if (kind === 'afk') return 'kind-afk';
+  if (kind === 'custom') return 'kind-custom';
+  return 'kind-app';
+}
+
+function renderTabs() {
+  for (const btn of tabsEl.querySelectorAll('button')) {
+    btn.classList.toggle('active', parseInt(btn.dataset.days, 10) === currentDays);
+  }
+}
+
+function render(data) {
+  pcLabelEl.textContent = data.label || PC_ID;
+  statusDotEl.classList.toggle('online', !!data.online);
+
+  const start = new Date(data.windowStart);
+  const end = new Date(data.windowEnd);
+  const fmt = (d) => d.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  metaEl.textContent = `${fmt(start)} 〜 ${fmt(end)}`;
+
+  trackedTotalEl.textContent = formatDuration(data.trackedMs);
+  afkTotalEl.textContent = formatDuration(data.afkMs);
+
+  const breakdown = data.breakdown || [];
+  if (breakdown.length === 0) {
+    emptyState.style.display = 'block';
+    breakdownEl.innerHTML = '';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  const maxMs = Math.max(...breakdown.map((b) => b.durationMs), 1);
+  breakdownEl.innerHTML = breakdown
+    .map((b) => {
+      const pct = Math.max(2, Math.round((b.durationMs / maxMs) * 100));
+      return `
+        <div class="row ${kindClass(b.kind)}">
+          <div class="row-top">
+            <span class="row-label">${escapeHtml(b.label)}</span>
+            <span class="row-time">${formatDuration(b.durationMs)}</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+async function poll() {
+  if (!PC_ID) {
+    showError('PCが指定されていません。ダッシュボードから「履歴を見る」リンクを開いてください。');
+    return;
+  }
+  try {
+    const url = new URL('/api/history', window.location.origin);
+    url.searchParams.set('id', PC_ID);
+    url.searchParams.set('days', String(currentDays));
+    if (TOKEN) url.searchParams.set('token', TOKEN);
+    const res = await fetch(url.toString(), { cache: 'no-store' });
+    if (!res.ok) {
+      showError(`サーバーからエラーが返されました (HTTP ${res.status})。URLの ?token=... が正しいか確認してください。`);
+      return;
+    }
+    hideError();
+    const data = await res.json();
+    render(data);
+  } catch (e) {
+    showError(`サーバーに接続できません: ${e.message}`);
+  }
+}
+
+tabsEl.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button[data-days]');
+  if (!btn) return;
+  currentDays = parseInt(btn.dataset.days, 10);
+  renderTabs();
+  poll();
+});
+
+renderTabs();
+poll();
+setInterval(poll, POLL_INTERVAL_MS);
+</script>
+</body>
+</html>
