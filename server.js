@@ -7,6 +7,9 @@
 //     -> みんなが同じURL(+閲覧用トークン)を開くだけで、同じ画面を見られる
 //   - 状態が変わるたびに履歴(いつ何をしていたか)も記録し、
 //     GET /api/history で「過去○日間、何にどれくらいの時間を使ったか」の集計を返す
+//   - さらにアプリごとに、実際のウィンドウタイトル(ブラウザのページ名・Discordのサーバー/
+//     チャンネル名など、エージェントが元々フォアグラウンドウィンドウから取得して送ってきている
+//     文字列)の内訳も記録し、GET /api/history/detail で「そのアプリの中で何を見ていたか」を返す
 //   - GET /history で、その履歴をスマホでも読みやすい簡易ページとして配信する
 //     -> この履歴機能は OWNER_TOKEN を知っている人(自分だけ)専用。
 //        VIEW_TOKEN(友達にも共有する閲覧用トークン)では見られないし、
@@ -50,6 +53,7 @@ const MAX_PCS = parseInt(process.env.MAX_PCS || '10', 10);
 const HISTORY_RETENTION_DAYS = parseFloat(process.env.HISTORY_RETENTION_DAYS || '7');
 const HISTORY_RETENTION_MS = HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const HISTORY_MAX_SEGMENTS = parseInt(process.env.HISTORY_MAX_SEGMENTS || '5000', 10);
+const HISTORY_TITLE_MAX_SEGMENTS = parseInt(process.env.HISTORY_TITLE_MAX_SEGMENTS || '4000', 10);
 
 const DASHBOARD_HTML_PATH = path.join(__dirname, 'public', 'dashboard.html');
 const HISTORY_HTML_PATH = path.join(__dirname, 'public', 'history.html');
@@ -104,6 +108,14 @@ const firstSeenOrder = [];
 //   label: 画面表示用の名前(アプリ名 / "AFK" / カスタムステータス文)
 // 一番最後の要素が「今も続いている区間」で、POSTが来るたびに endedAt を伸ばしていく。
 const history = Object.create(null);
+
+// PCごとの「ウィンドウタイトルの内訳」履歴(アプリ内の詳細用)。
+// 各要素: { appKey, title, startedAt, endedAt }
+//   appKey: どのアプリ区間の最中だったか ("app:chrome.exe" など。history の key と対応)
+//   title:  実際のウィンドウタイトル文字列(ブラウザのページ名、Discordのサーバー/チャンネル名など。
+//           エージェントが元々フォアグラウンドウィンドウから取得して毎回送ってきているもの)
+// AFK中・カスタムステータス中はタイトルの内訳を取らない(意味が薄いため)。
+const titleHistory = Object.create(null);
 
 function sendJson(res, statusCode, obj) {
   const body = JSON.stringify(obj);
@@ -232,6 +244,35 @@ function recordHistory(id, data, now) {
   while (segments.length > HISTORY_MAX_SEGMENTS) {
     segments.shift();
   }
+
+  return info;
+}
+
+// ウィンドウタイトルの内訳を記録する(アプリ区間中のみ)。ロジックはrecordHistoryと同じ考え方:
+// 同じタイトルが続く間は延長、変われば新しい区間を開始。AFK中・カスタム中は記録しない。
+function recordTitleHistory(id, data, info, now) {
+  if (info.kind !== 'app') return;
+  const title = typeof data.status === 'string' && data.status.trim() ? data.status.trim() : null;
+  if (!title) return;
+
+  if (!titleHistory[id]) titleHistory[id] = [];
+  const segments = titleHistory[id];
+  const last = segments[segments.length - 1];
+
+  if (last && last.appKey === info.key && last.title === title) {
+    last.endedAt = now;
+  } else {
+    if (last) last.endedAt = now;
+    segments.push({ appKey: info.key, title, startedAt: now, endedAt: now });
+  }
+
+  const cutoff = now - HISTORY_RETENTION_MS;
+  while (segments.length > 0 && segments[0].endedAt < cutoff) {
+    segments.shift();
+  }
+  while (segments.length > HISTORY_TITLE_MAX_SEGMENTS) {
+    segments.shift();
+  }
 }
 
 // 指定PC・指定期間(windowStart〜now)の履歴を、キーごとの合計時間に集計する。
@@ -287,6 +328,43 @@ function buildHistorySummary(id, windowDays) {
     breakdown,
     serverTime: now,
   };
+}
+
+// 指定PC・指定アプリ(appKey)・指定期間について、実際のウィンドウタイトルごとの合計時間を集計する。
+// 「このアプリの中で何を見ていたか」(ブラウザのページ名、Discordのサーバー/チャンネル名など)の内訳。
+function buildHistoryDetail(id, appKey, windowDays) {
+  const now = Date.now();
+  const windowMs = Math.min(windowDays, HISTORY_RETENTION_DAYS) * 24 * 60 * 60 * 1000;
+  const windowStart = now - windowMs;
+  const segments = titleHistory[id] || [];
+  const isOnline = !!(state[id] && now - state[id].lastSeen <= OFFLINE_THRESHOLD_MS);
+
+  const totalsByTitle = new Map();
+  let trackedMs = 0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg.appKey !== appKey) continue;
+    const isLast = i === segments.length - 1;
+    const effectiveEndedAt = isLast && isOnline ? now : seg.endedAt;
+    const start = Math.max(seg.startedAt, windowStart);
+    const end = Math.max(effectiveEndedAt, start);
+    if (end <= windowStart) continue;
+    const durationMs = end - start;
+    if (durationMs <= 0) continue;
+
+    trackedMs += durationMs;
+    const existing = totalsByTitle.get(seg.title);
+    if (existing) {
+      existing.durationMs += durationMs;
+    } else {
+      totalsByTitle.set(seg.title, { title: seg.title, durationMs });
+    }
+  }
+
+  const breakdown = Array.from(totalsByTitle.values()).sort((a, b) => b.durationMs - a.durationMs);
+
+  return { id, appKey, windowDays, windowStart, windowEnd: now, trackedMs, breakdown, serverTime: now };
 }
 
 const server = http.createServer((req, res) => {
@@ -381,7 +459,8 @@ const server = http.createServer((req, res) => {
         durationSeconds: typeof data.durationSeconds === 'number' ? data.durationSeconds : null,
         lastSeen: now,
       };
-      recordHistory(id, data, now);
+      const info = recordHistory(id, data, now);
+      recordTitleHistory(id, data, info, now);
       sendJson(res, 200, { ok: true });
     });
     return;
@@ -411,6 +490,24 @@ const server = http.createServer((req, res) => {
     if (!Number.isFinite(days) || days <= 0) days = 7;
     days = Math.min(days, HISTORY_RETENTION_DAYS);
     sendJson(res, 200, buildHistorySummary(id, days));
+    return;
+  }
+
+  if (pathname === '/api/history/detail' && req.method === 'GET') {
+    if (!isOwnerAuthorized(req, parsedUrl)) {
+      sendJson(res, 404, { error: 'not found' });
+      return;
+    }
+    const id = (parsedUrl.searchParams.get('id') || '').trim();
+    const key = (parsedUrl.searchParams.get('key') || '').trim();
+    if (!id || !key) {
+      sendJson(res, 400, { error: 'missing "id" or "key" query parameter' });
+      return;
+    }
+    let days = parseFloat(parsedUrl.searchParams.get('days') || '7');
+    if (!Number.isFinite(days) || days <= 0) days = 7;
+    days = Math.min(days, HISTORY_RETENTION_DAYS);
+    sendJson(res, 200, buildHistoryDetail(id, key, days));
     return;
   }
 
