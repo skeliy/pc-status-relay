@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {
     "dashboard_url": "",
     "music_enabled": True,
     "music_hotkey": "ctrl+alt+m",
+    "music_sound": "notify.wav",
     "update_check_interval_min": 30,
 }
 

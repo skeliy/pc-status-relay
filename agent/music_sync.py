@@ -308,6 +308,7 @@ class MusicSync:
                 self._send(sender, "busy", sid, {})
                 return
             _log(f"{label} からリクエストが来ました (session={sid})")
+            self.play_notify_sound()
             self.notifier.ask(
                 sid,
                 "曲の共有のリクエスト",
@@ -376,6 +377,23 @@ class MusicSync:
                     return
                 self._apply_remote_locked(m.get("data") or {}, age)
             return
+
+    def play_notify_sound(self):
+        """リクエストが来た時の通知音を鳴らす(config の music_sound。空なら鳴らさない)。"""
+        name = (self.config.get("music_sound") or "").strip()
+        if not name:
+            return
+        path = name if os.path.isabs(name) else os.path.join(SCRIPT_DIR, name)
+        if not os.path.exists(path):
+            _log(f"通知音のファイルが見つかりません: {path}")
+            return
+        try:
+            import winsound  # Windows の標準機能(追加のインストール不要)
+
+            # 鳴らしている間も他の処理を止めないよう、非同期で鳴らす
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        except Exception as e:
+            _log(f"通知音を鳴らせませんでした: {e}")
 
     # ------------------------------------------------------------------ 同期の中身
     def _partner_names(self):

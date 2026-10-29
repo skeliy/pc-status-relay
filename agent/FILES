@@ -12,3 +12,4 @@ extension/manifest.json
 extension/background.js
 extension/content.js
 extension/page.js
+notify.wav
