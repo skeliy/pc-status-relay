@@ -10,9 +10,12 @@ PC status agent (Windows専用)
 「お風呂中」「準備中」のようなカスタムステータスを分数指定で設定できます
 (設定した時間が経過すると自動的に元の自動検出表示に戻ります)。
 
+さらに、Apple Music(ブラウザ版)の曲を友達と同時に再生する「曲の共有」機能があります
+(music_sync.py / popup.py / extension フォルダ。使い方は README.md)。
+
 必要なライブラリのインストール:
     pip install -r requirements.txt
-    (中身: pywin32 psutil requests)
+    (必須: pywin32 psutil requests / トレイアイコンを使う場合だけ: pystray Pillow)
 
 初回起動時、同じフォルダに config.json が無ければテンプレートを自動生成して終了します。
 config.json を開いて設定値を書き換えてから、もう一度実行してください。
@@ -25,7 +28,9 @@ config.json はそのまま使い続けられます。
 
 import json
 import os
+import subprocess
 import sys
+import threading
 import time
 
 try:
@@ -42,7 +47,9 @@ except ImportError as e:
 
 from status_logic import StatusOverride, StatusTracker, compute_status_fields, tracking_key_for
 from local_status_server import start_local_ui_server
-from updater import check_and_apply_update
+
+# tray_icon / music_sync / popup は、自動アップデートで後から届くファイルなので、
+# ここではまだ読み込まない(無くても起動できるように、main_loop の中で読み込む)。
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -59,6 +66,11 @@ DEFAULT_CONFIG = {
     "local_ui_port": 8787,
     "auto_update_enabled": True,
     "update_base_url": "https://raw.githubusercontent.com/USERNAME/REPO/main/agent",
+    "show_tray_icon": False,
+    "dashboard_url": "",
+    "music_enabled": True,
+    "music_hotkey": "ctrl+alt+m",
+    "update_check_interval_min": 30,
 }
 
 
@@ -77,6 +89,134 @@ def load_or_create_config():
     merged = dict(DEFAULT_CONFIG)
     merged.update(config)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# 自動アップデート
+# ---------------------------------------------------------------------------
+# update_base_url(GitHubの agent フォルダ)にある VERSION が手元と違うか、FILES に書かれた
+# ファイルが手元に無ければ、FILES のファイルを全部ダウンロードして入れ替え、再起動する。
+#
+# 以前の updater.py は決まった3つのファイルしか取りに行かなかったので、新しいファイルを
+# 増やしても友達のPCに届かなかった。この agent.py はその3つに含まれるので、古いバージョンから
+# でも「まず agent.py が新しくなる → 新しい agent.py が残りのファイルを全部取ってくる」という
+# 2段階で、最新の状態までたどり着ける。config.json には一切触らない。
+VERSION_PATH = os.path.join(SCRIPT_DIR, "VERSION")
+PLACEHOLDER_MARKER = "USERNAME/REPO"
+
+
+def _read_local_version():
+    try:
+        with open(VERSION_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return "0.0.0"
+
+
+def _safe_relative_path(name):
+    """FILES に書かれたパスが、agent フォルダの中を指しているか確かめる(変な場所に書き込まないため)。"""
+    norm = os.path.normpath(name.replace("/", os.sep))
+    if os.path.isabs(norm) or norm.startswith("..") or os.path.basename(norm).lower() == "config.json":
+        return None
+    return norm
+
+
+def restart_self():
+    """このプログラムをもう一度起動し直して、今のプロセスは終わる。"""
+    args = [sys.executable, os.path.abspath(__file__)] + sys.argv[1:]
+    subprocess.Popen(args, cwd=SCRIPT_DIR)
+    os._exit(0)
+
+
+def self_update(config):
+    if not config.get("auto_update_enabled", True):
+        return
+    base = (config.get("update_base_url") or "").rstrip("/")
+    if not base or PLACEHOLDER_MARKER in base:
+        return
+    try:
+        resp = requests.get(base + "/VERSION", timeout=8)
+        resp.raise_for_status()
+        remote_version = resp.text.strip()
+        resp = requests.get(base + "/FILES", timeout=8)
+        resp.raise_for_status()
+        names = [ln.strip() for ln in resp.text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    except Exception as e:
+        print(f"[アップデート確認] 確認できませんでした(通常どおり起動します): {e}")
+        return
+    if not remote_version or not names:
+        return
+
+    paths = []
+    for name in names:
+        rel = _safe_relative_path(name)
+        if rel is None:
+            print(f"[アップデート] 不正なファイル名を無視しました: {name}")
+            continue
+        paths.append((name, rel))
+
+    local_version = _read_local_version()
+    missing = [rel for _, rel in paths if not os.path.exists(os.path.join(SCRIPT_DIR, rel))]
+    if remote_version == local_version and not missing:
+        print(f"[アップデート確認] 最新版です (version {local_version})")
+        return
+
+    print(f"[アップデート] {local_version} -> {remote_version} に更新します(足りないファイル {len(missing)} 個)")
+    downloaded = []
+    try:
+        for name, rel in paths:
+            resp = requests.get(base + "/" + name, timeout=15)
+            resp.raise_for_status()
+            content = resp.content
+            if not content.strip():
+                raise ValueError(f"{name} が空でした")
+            if rel.endswith(".py"):
+                compile(content.decode("utf-8"), rel, "exec")  # 壊れたコードは適用しない
+            downloaded.append((rel, content))
+    except Exception as e:
+        print(f"[アップデート] ダウンロードか確認に失敗したので、今回は更新しません: {e}")
+        return
+
+    try:
+        for rel, content in downloaded:
+            path = os.path.join(SCRIPT_DIR, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(content)
+        with open(VERSION_PATH, "w", encoding="utf-8") as f:
+            f.write(remote_version)
+    except OSError as e:
+        print(f"[アップデート] ファイルを書き込めませんでした: {e}")
+        return
+
+    print("[アップデート] 更新しました。新しいバージョンで起動し直します...")
+    restart_self()
+
+
+def start_periodic_update(config, override, music):
+    """起動中も30分ごとに新しいバージョンを確認する(以前は起動した時しか確認しなかったので、
+    PCを付けっぱなしの友達には、再起動するまで更新が届かなかった)。
+    カスタムステータスや曲の共有の最中は、再起動で消えてしまうので更新を後回しにする。"""
+    interval = float(config.get("update_check_interval_min", 30)) * 60
+    if interval <= 0:
+        return
+
+    def busy():
+        if override.snapshot()[0]:
+            return True
+        return music is not None and (music.session is not None or music.pending_out is not None)
+
+    def loop():
+        while True:
+            time.sleep(interval)
+            if busy():
+                continue
+            try:
+                self_update(config)  # 新しければここで再起動するので戻ってこない
+            except Exception as e:
+                print(f"[アップデート確認] エラー: {e}")
+
+    threading.Thread(target=loop, name="update-check", daemon=True).start()
 
 
 def get_idle_seconds() -> float:
@@ -133,18 +273,59 @@ def build_payload(config, override: StatusOverride, tracker: StatusTracker):
     return payload
 
 
+def start_music(config):
+    """曲の共有機能を起動する。必要なファイルが無い・使えない環境では何もしない。"""
+    if not config.get("music_enabled", True):
+        return None
+    try:
+        from music_sync import MusicSync
+        from popup import make_notifier, start_hotkey
+    except Exception as e:
+        print(f"[曲の共有] 起動できませんでした(ファイル不足?): {e}")
+        return None
+    try:
+        music = MusicSync(config, notifier=make_notifier())
+    except Exception as e:
+        print(f"[曲の共有] 起動できませんでした: {e}")
+        return None
+    try:
+        label = start_hotkey(config.get("music_hotkey", "ctrl+alt+m"), music.toggle)
+        if label:
+            music.hotkey_label = label
+    except Exception as e:
+        print(f"[ショートカット] 登録できませんでした(トレイアイコンや Apple Music の画面からは使えます): {e}")
+    return music
+
+
 def main_loop(config):
     override = StatusOverride()
     tracker = StatusTracker()
 
-    try:
-        start_local_ui_server(override, config["local_ui_port"])
-        print(
-            f"[カスタムステータス設定] http://127.0.0.1:{config['local_ui_port']}/ "
-            "をこのPCのブラウザで開くと設定できます"
-        )
-    except OSError as e:
-        print(f"[警告] ローカル設定用サーバーを起動できませんでした(ポート使用中?): {e}")
+    for attempt in range(20):  # 再起動直後は古いプロセスがまだポートを使っていることがあるので少し粘る
+        try:
+            start_local_ui_server(override, config["local_ui_port"])
+            print(
+                f"[カスタムステータス設定] http://127.0.0.1:{config['local_ui_port']}/ "
+                "をこのPCのブラウザで開くと設定できます"
+            )
+            break
+        except OSError as e:
+            if attempt == 19:
+                print(f"[警告] ローカル設定用サーバーを起動できませんでした(ポート使用中?): {e}")
+            else:
+                time.sleep(0.5)
+
+    music = start_music(config)
+    start_periodic_update(config, override, music)
+
+    if config.get("show_tray_icon", False):
+        try:
+            from tray_icon import start_tray_icon
+
+            if start_tray_icon(config, music=music):
+                print("[トレイアイコン] タスクバー右下(通知領域)にアイコンを表示しました")
+        except Exception as e:
+            print(f"[トレイアイコン] 表示できませんでした: {e}")
 
     print(f"[起動] pc_id={config['pc_id']} pc_label={config['pc_label']} -> {config['server_url']}")
     headers = {"Authorization": f"Bearer {config['write_token']}", "Content-Type": "application/json"}
@@ -171,7 +352,7 @@ def main_loop(config):
 
 if __name__ == "__main__":
     cfg = load_or_create_config()
-    check_and_apply_update(cfg)  # 新しいバージョンがあれば適用して自動的に再起動する(無ければ何もしない)
+    self_update(cfg)  # 新しいバージョンがあれば適用して自動的に再起動する(無ければ何もしない)
     if "CHANGE_ME" in cfg["write_token"] or "your-relay-server.example.com" in cfg["server_url"]:
         print(f"先に {CONFIG_PATH} を編集してから実行してください(server_url / write_token)。")
         sys.exit(1)

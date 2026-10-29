@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "PC Status 曲の共有 (Apple Music)",
+  "version": "1.0.0",
+  "description": "Apple Music のWeb版で流している曲を、PC Status のエージェント経由で友達と同時に再生します。",
+  "permissions": ["scripting", "storage"],
+  "host_permissions": ["https://music.apple.com/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.apple.com/*"],
+      "js": ["page.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://music.apple.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

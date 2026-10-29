@@ -15,6 +15,11 @@
 //        VIEW_TOKEN(友達にも共有する閲覧用トークン)では見られないし、
 //        ダッシュボード上にも「履歴」へのリンクは一切表示されない(自分のトークンで開いた時だけ出る)。
 //
+//   - 曲の共有(Apple Music)のために、エージェント同士のメッセージを中継する
+//     POST /api/music/send でメッセージを送り、GET /api/music/poll で受け取る(ロングポーリング)。
+//     中身(リクエスト・許可・再生中の曲など)はサーバーでは解釈せず、届けるだけ。
+//     どちらも WRITE_TOKEN が必要(エージェントだけが使う)。
+//
 // 外部ライブラリ不使用(Node.js標準の http / fs モジュールのみ)。
 //
 // 環境変数:
@@ -367,6 +372,133 @@ function buildHistoryDetail(id, appKey, windowDays) {
   return { id, appKey, windowDays, windowStart, windowEnd: now, trackedMs, breakdown, serverTime: now };
 }
 
+// ---------------------------------------------------------------------------
+// 曲の共有(Apple Music)用のメッセージ中継
+// ---------------------------------------------------------------------------
+// エージェントは GET /api/music/poll を出しっぱなしにしておき(最大 MUSIC_POLL_WAIT_MS 待つ)、
+// 自分宛てのメッセージが来た瞬間に返事をもらう。こうすると数百ミリ秒で相手に届く。
+// メッセージはメモリ上に短時間(MUSIC_MESSAGE_TTL_MS)だけ置いておき、取りに来なければ捨てる。
+const MUSIC_POLL_WAIT_MS = 25000;
+const MUSIC_MESSAGE_TTL_MS = 120000;
+const MUSIC_ONLINE_MS = 90000; // この時間内に poll してきたPCを「曲の共有ができる相手」とみなす
+const MUSIC_TYPES = new Set(['request', 'accept', 'decline', 'state', 'stop', 'busy']);
+
+let musicSeq = 0;
+const musicQueues = Object.create(null); // pcId -> [{ seq, ... }]
+const musicWaiters = Object.create(null); // pcId -> [{ res, since, timer }]
+const musicLastPoll = Object.create(null); // pcId -> { at, label }
+
+function musicMessagesFor(pcId, since) {
+  const now = Date.now();
+  const queue = (musicQueues[pcId] || []).filter((m) => m.seq > since && now - m.at <= MUSIC_MESSAGE_TTL_MS);
+  musicQueues[pcId] = queue;
+  return queue;
+}
+
+function musicRespond(res, pcId, messages) {
+  sendJson(res, 200, { seq: musicSeq, serverNow: Date.now(), messages });
+}
+
+function musicWake(pcId) {
+  const waiters = musicWaiters[pcId];
+  if (!waiters || waiters.length === 0) return;
+  musicWaiters[pcId] = [];
+  for (const w of waiters) {
+    clearTimeout(w.timer);
+    musicRespond(w.res, pcId, musicMessagesFor(pcId, w.since));
+  }
+}
+
+function musicRecipients(from, to) {
+  const now = Date.now();
+  const online = Object.keys(musicLastPoll).filter((id) => id !== from && now - musicLastPoll[id].at <= MUSIC_ONLINE_MS);
+  if (to === '*') return online;
+  return online.includes(to) ? [to] : [];
+}
+
+function handleMusicSend(req, res) {
+  if (!isWriteAuthorized(req)) {
+    sendJson(res, 401, { error: 'unauthorized' });
+    return;
+  }
+  readJsonBody(req, 16 * 1024, (err, data) => {
+    if (err) {
+      sendJson(res, 400, { error: err.message });
+      return;
+    }
+    const from = typeof data.from === 'string' ? data.from.trim() : '';
+    const to = typeof data.to === 'string' ? data.to.trim() : '';
+    const type = typeof data.type === 'string' ? data.type : '';
+    if (!from || !to || !MUSIC_TYPES.has(type)) {
+      sendJson(res, 400, { error: 'missing "from" / "to" / valid "type"' });
+      return;
+    }
+    const recipients = musicRecipients(from, to);
+    const now = Date.now();
+    for (const pcId of recipients) {
+      const message = {
+        seq: ++musicSeq,
+        at: now,
+        from,
+        fromLabel: typeof data.fromLabel === 'string' ? data.fromLabel.slice(0, 60) : from,
+        to: pcId,
+        type,
+        sessionId: typeof data.sessionId === 'string' ? data.sessionId.slice(0, 64) : '',
+        data: data.data && typeof data.data === 'object' ? data.data : {},
+      };
+      if (!musicQueues[pcId]) musicQueues[pcId] = [];
+      musicQueues[pcId].push(message);
+      if (musicQueues[pcId].length > 200) musicQueues[pcId].shift();
+      musicWake(pcId);
+    }
+    sendJson(res, 200, {
+      ok: true,
+      delivered: recipients.length,
+      recipients: recipients.map((id) => ({ id, label: musicLastPoll[id].label })),
+    });
+  });
+}
+
+function handleMusicPoll(req, res, parsedUrl) {
+  if (!isWriteAuthorized(req)) {
+    sendJson(res, 401, { error: 'unauthorized' });
+    return;
+  }
+  const pcId = (parsedUrl.searchParams.get('pc') || '').trim();
+  if (!pcId) {
+    sendJson(res, 400, { error: 'missing "pc"' });
+    return;
+  }
+  const label = (parsedUrl.searchParams.get('label') || pcId).slice(0, 60);
+  musicLastPoll[pcId] = { at: Date.now(), label };
+
+  const since = parseInt(parsedUrl.searchParams.get('since') || '-1', 10);
+  if (!Number.isFinite(since) || since < 0) {
+    // 起動直後: 古いメッセージは渡さず、今の番号だけ教える
+    musicRespond(res, pcId, []);
+    return;
+  }
+  const pending = musicMessagesFor(pcId, since);
+  if (pending.length > 0) {
+    musicRespond(res, pcId, pending);
+    return;
+  }
+  const waiter = { res, since, timer: null };
+  waiter.timer = setTimeout(() => {
+    musicWaiters[pcId] = (musicWaiters[pcId] || []).filter((w) => w !== waiter);
+    musicLastPoll[pcId] = { at: Date.now(), label };
+    musicRespond(res, pcId, []);
+  }, MUSIC_POLL_WAIT_MS);
+  // 相手(エージェント)が接続を切ったら待つのをやめる。
+  // ※ req ではなく res の close を使う(Node 16以降、req の close は本文を読み終えた時点で来てしまうため)
+  res.on('close', () => {
+    clearTimeout(waiter.timer);
+    musicWaiters[pcId] = (musicWaiters[pcId] || []).filter((w) => w !== waiter);
+  });
+  if (!musicWaiters[pcId]) musicWaiters[pcId] = [];
+  musicWaiters[pcId].push(waiter);
+}
+
 const server = http.createServer((req, res) => {
   let parsedUrl;
   try {
@@ -508,6 +640,16 @@ const server = http.createServer((req, res) => {
     if (!Number.isFinite(days) || days <= 0) days = 7;
     days = Math.min(days, HISTORY_RETENTION_DAYS);
     sendJson(res, 200, buildHistoryDetail(id, key, days));
+    return;
+  }
+
+  if (pathname === '/api/music/send' && req.method === 'POST') {
+    handleMusicSend(req, res);
+    return;
+  }
+
+  if (pathname === '/api/music/poll' && req.method === 'GET') {
+    handleMusicPoll(req, res, parsedUrl);
     return;
   }
 

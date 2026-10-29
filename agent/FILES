@@ -1,0 +1,14 @@
+# 自動アップデートで配るファイルの一覧(agent フォルダからの場所)。
+# ファイルを増やしたらここにも書き足して、VERSION を上げる。
+# config.json と start_agent_hidden.vbs は人によって中身が違うので、ここには書かない。
+agent.py
+status_logic.py
+local_status_server.py
+tray_icon.py
+music_sync.py
+popup.py
+requirements.txt
+extension/manifest.json
+extension/background.js
+extension/content.js
+extension/page.js
