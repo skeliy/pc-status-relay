@@ -69,12 +69,10 @@
   }
 
   // 「曲」だけに絞った検索(ページの検索と同じ仕組み)
-  // 届いた名前と、英語の名前(alt)の両方で探して混ぜる
+  // 届いた名前と、別の名前(英語・日本語など)のすべてで探して混ぜる
+  // (カナダなどの Apple Music では日本の曲がローマ字になるので、日本語の名前でも探す)
   async function search(desc) {
-    const queries = [];
-    if (desc.alt && (desc.alt.title || desc.alt.artist)) queries.push([desc.alt.title || desc.title, desc.alt.artist || desc.artist].filter(Boolean).join(' '));
-    queries.push([desc.title, desc.artist].filter(Boolean).join(' '));
-    const lists = await Promise.all([...new Set(queries)].map((q) => searchOnce(q).catch(() => [])));
+    const lists = await Promise.all(M().queries(desc, 3).map((q) => searchOnce(q).catch(() => [])));
     const seen = new Set();
     const out = [];
     for (const c of [].concat(...lists)) {

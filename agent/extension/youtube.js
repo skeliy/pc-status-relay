@@ -123,18 +123,18 @@
   // ページ自身の検索と同じ仕組みで動画を探す。
   // 公式の音源(「アーティスト - Topic」の動画)はふつうの検索では出てこないことが多いので、「topic」を付けた検索もして混ぜる
   async function search(desc) {
-    const query = [desc.title, desc.artist].filter(Boolean).join(' ');
-    // 英語の名前(alt)があれば、それでも探す(日本のストアのカタカナ名だと見つかりにくいため)
-    const en = desc.alt && (desc.alt.title || desc.alt.artist) ? [desc.alt.title || desc.title, desc.alt.artist || desc.artist].filter(Boolean).join(' ') : null;
-    const main = en || query;
-    const [plain, topic, orig] = await Promise.all([
-      searchOnce(main),
-      searchOnce(main + ' topic').catch(() => []),
-      en && en !== query ? searchOnce(query).catch(() => []) : Promise.resolve([]),
-    ]);
+    // 届いた名前と、別の名前(英語・日本語など)のすべてで探す。それぞれ「topic」を付けた検索もする
+    const qs = M().queries(desc, 3);
+    const lists = await Promise.all(
+      qs.map((q) =>
+        Promise.all([searchOnce(q).catch(() => []), searchOnce(q + ' topic').catch(() => [])]).then(([plain, topic]) =>
+          plain.concat(topic.filter((x) => x.preferred))
+        )
+      )
+    );
     const seen = new Set();
     const out = [];
-    for (const c of plain.concat(topic.filter((x) => x.preferred), orig)) {
+    for (const c of [].concat(...lists)) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
       out.push(c);

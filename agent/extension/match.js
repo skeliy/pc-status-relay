@@ -68,13 +68,26 @@
   }
 
   // 曲名・アーティスト名は、届いた名前と別の言語の名前(alt。例: 日本のストアのカタカナ名に対する英語名)の、合うほうで比べる
+  // 届いた名前と、別の名前(alt / alts。英語・日本語など)をまとめる
+  function variants(desc) {
+    const out = [{ title: desc.title, artist: desc.artist }];
+    if (desc.alt) out.push(desc.alt);
+    for (const n of desc.alts || []) if (n) out.push(n);
+    return out;
+  }
+  function titleNames(desc) {
+    return Array.from(new Set(variants(desc).map((v) => v.title).filter(Boolean)));
+  }
   function titleScore(c, desc) {
-    let t = similarity(c.title, desc.title);
-    if (desc.alt && desc.alt.title) t = Math.max(t, similarity(c.title, desc.alt.title));
+    let t = 0;
+    for (const n of titleNames(desc)) t = Math.max(t, similarity(c.title, n));
     return t;
   }
+  function exactTitle(c, desc) {
+    return titleNames(desc).some((n) => raw(c.title) === raw(n));
+  }
   function artistNames(desc) {
-    return [desc.artist, desc.alt && desc.alt.artist].filter(Boolean);
+    return Array.from(new Set(variants(desc).map((v) => v.artist).filter(Boolean)));
   }
   function artistScore(c, desc) {
     const names = artistNames(desc);
@@ -110,7 +123,7 @@
       const a = artistScore(c, desc);
       const d = durationScore(Number(c.duration) || 0, Number(desc.duration) || 0);
       // 括弧の中まで含めて曲名がぴったり同じなら少し加点(「(Remaster)」「(Live)」などの別バージョンより優先)
-      const exact = raw(c.title) === raw(desc.title) || (desc.alt && raw(c.title) === raw(desc.alt.title)) ? 0.08 : 0;
+      const exact = exactTitle(c, desc) ? 0.08 : 0;
       const score = 0.55 * t + 0.3 * a + 0.15 * d + exact + (c.preferred ? 0.05 : 0) - (otherVersion(c.title, desc.title) ? 0.3 : 0);
       if (t < 0.6 || score < 0.6) continue;
       if (!top || score > top.score) top = { id: c.id, score, candidate: c };
@@ -133,7 +146,7 @@
         diff,
         other: otherVersion(c.title, desc.title) ? 1 : 0, // ライブ版・アコースティック版など
         pref: c.preferred ? 1 : 0, // 公式の音源(YouTube の「〜 - Topic」、YouTube Music の「曲」)
-        score: 0.6 * t + 0.4 * a + (raw(c.title) === raw(desc.title) || (desc.alt && raw(c.title) === raw(desc.alt.title)) ? 0.08 : 0),
+        score: 0.6 * t + 0.4 * a + (exactTitle(c, desc) ? 0.08 : 0),
         candidate: c,
       });
     }
@@ -156,5 +169,14 @@
     return (Number(m[1] || 0) * 3600) + Number(m[2]) * 60 + Number(m[3]);
   }
 
-  window.__pcsMatch = { best, closest, similarity, parseClock };
+  // 検索に使う言葉(届いた名前と別の名前で、重複なく最大 max 個。日本語などの名前を先に)
+  function queries(desc, max) {
+    const qs = [];
+    const vs = variants(desc).map((v) => [v.title || desc.title, v.artist || desc.artist].filter(Boolean).join(' ')).filter(Boolean);
+    const cjk = (q) => /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(q);
+    for (const q of vs.filter(cjk).concat(vs.filter((q) => !cjk(q)))) if (!qs.includes(q)) qs.push(q);
+    return qs.slice(0, max || 3);
+  }
+
+  window.__pcsMatch = { best, closest, similarity, parseClock, queries };
 })();

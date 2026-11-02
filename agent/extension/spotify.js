@@ -213,7 +213,7 @@
     if (desc.ids && desc.ids.spotify) return desc.ids.spotify;
     const queries = [];
     if (desc.isrc) queries.push('isrc:' + desc.isrc);
-    queries.push([desc.title, desc.artist].filter(Boolean).join(' '));
+    for (const q of M().queries(desc, 2)) queries.push(q); // 届いた名前と別の名前(日本語など)
     for (const q of queries) {
       const candidates = await searchUi(q);
       if (q.startsWith('isrc:') && candidates.length === 1) return candidates[0].id;
