@@ -134,6 +134,8 @@
   }
   .note { color: var(--faint); font-size: 13px; margin: 14px 0 0; }
   .note code { white-space: normal; word-break: break-all; }
+  .grow { flex: 1; min-width: 0; }
+  .grow .cmd { margin-top: 8px; }
   .cmd { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 11px; background: var(--bg); border: 1px solid var(--line-strong); }
   .cmd code { flex: 1; min-width: 0; border: 0; padding: 0; background: none; white-space: normal; word-break: break-all; font-size: 12.5px; color: var(--text); }
   .copy { flex: none; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
@@ -234,13 +236,12 @@
   <section class="card hidden" id="installCard">
     <h2 data-i18n="installTitle"></h2>
     <p class="lead" id="installReason"></p>
-    <div class="cmd"><code id="installCmd"></code><button class="copy" type="button" id="copyCmd" data-i18n="copy"></button></div>
     <ol class="steps">
-      <li><span data-i18n-html="cmdStep1"></span></li>
+      <li><div class="grow"><span data-i18n-html="cmdStep1"></span>
+        <div class="cmd"><code id="installCmd"></code><button class="copy" type="button" id="copyCmd" data-i18n="copy"></button></div></div></li>
       <li><span data-i18n-html="cmdStep2"></span></li>
       <li><span data-i18n-html="cmdStep3"></span></li>
       <li><span data-i18n-html="cmdStep4"></span></li>
-      <li><span data-i18n-html="cmdStep5"></span></li>
     </ol>
     <p class="note" data-i18n-html="autoNote"></p>
     <details class="alt">
@@ -305,16 +306,15 @@
       joinFailed: (e) => `Couldn’t join: ${e}`,
       noServer: 'Couldn’t reach the server.',
       installTitle: 'Install the extension (one time only)',
-      installReason: 'A small browser extension keeps your music in sync. Works in Chrome, Edge and Brave. On Windows, one command installs it and keeps it up to date.',
+      installReason: 'You need a small browser extension (Chrome, Edge or Brave). It takes about a minute.',
       outdated: (a, b) => `Your extension (${a}) is too old to join. Install the new version (${b}) with the command below.`,
       copy: 'Copy',
       copied: 'Copied',
-      cmdStep1: 'Right-click the <b>Start</b> button and open <b>Terminal</b> (or <b>Windows PowerShell</b>). Paste the command above and press <b>Enter</b>.',
-      cmdStep2: 'It downloads the extension and sets up automatic updates. The folder path is copied to your clipboard.',
-      cmdStep3: 'Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>, Brave: <code>brave://extensions</code>) and turn on <b>Developer mode</b> in the top-right corner. Keep it on.',
-      cmdStep4: 'Click <b>Load unpacked</b>, paste the folder path into the box at the top of the window, and click <b>Select Folder</b>.',
-      cmdStep5: 'Pin the red headphone icon from the puzzle menu, then reload this page. You won\u2019t need the password again.',
-      autoNote: 'New versions install automatically every 2 hours. Already installed from a .zip? Remove that one on the extensions page first. To stop automatic updates later, run <code>irm ORIGIN/listen-uninstall.ps1 | iex</code>.',
+      cmdStep1: 'Click <b>Copy</b>.',
+      cmdStep2: 'Press the <b>Windows key</b>, type <b>powershell</b> and press <b>Enter</b>. In the window that opens, press <b>Ctrl+V</b>, then <b>Enter</b>. Wait until it says <b>Done!</b>',
+      cmdStep3: 'Open <code>chrome://extensions</code> and turn on <b>Developer mode</b> (top right). Click <b>Load unpacked</b>, press <b>Ctrl+V</b>, then click <b>Select Folder</b>.',
+      cmdStep4: 'Reload this page.',
+      autoNote: 'It updates itself automatically. If you installed it from a .zip before, remove that one first. To uninstall: <code>irm ORIGIN/listen-uninstall.ps1 | iex</code>',
       manualTitle: 'On a Mac, or prefer not to use a command? Install from a .zip',
       updateAvailable: (a, b) => `A newer version (${b}) is available; you have ${a}. You can still join. If you installed with the command, it updates automatically.`,
       downloadButton: 'Download extension (.zip)',
@@ -354,16 +354,15 @@
       joinFailed: (e) => `参加できませんでした: ${e}`,
       noServer: 'サーバーに繋がりませんでした。',
       installTitle: '拡張機能を入れる(最初の1回だけ)',
-      installReason: '曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。Windows なら、コマンド1つで入れられて、そのあとは自動で新しい版になります。',
+      installReason: '曲を同時に流すために、ブラウザの拡張機能を入れます(Chrome・Edge・Brave)。1分ほどで終わります。',
       outdated: (a, b) => `拡張機能の版(${a})が古すぎて参加できません。下のコマンドで新しい版(${b})を入れてください。`,
       copy: 'コピー',
       copied: 'コピーしました',
-      cmdStep1: '<b>スタート</b>ボタンを右クリックして、<b>ターミナル</b>(または <b>Windows PowerShell</b>)を開きます。上のコマンドを貼り付けて <b>Enter</b> を押します。',
-      cmdStep2: '拡張機能がダウンロードされ、自動更新が設定されます。拡張機能のフォルダの場所が、クリップボードにコピーされます。',
-      cmdStep3: '<code>chrome://extensions</code> を開き(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)、右上の <b>デベロッパーモード</b> をオンにします。オンのままにしておいてください。',
-      cmdStep4: '<b>パッケージ化されていない拡張機能を読み込む</b> を押し、開いた画面の上の欄にフォルダの場所を貼り付けて、<b>フォルダーの選択</b> を押します。',
-      cmdStep5: 'パズルのマークから赤いヘッドホンのアイコンを固定して、このページを再読み込みします。パスワードを入れ直す必要はありません。',
-      autoNote: '新しい版は2時間ごとに自動で入ります。前に zip で入れた人は、先に拡張機能ページでそちらを削除してください。自動更新をやめる時は <code>irm ORIGIN/listen-uninstall.ps1 | iex</code> を実行します。',
+      cmdStep1: '<b>コピー</b>を押します。',
+      cmdStep2: '<b>Windows キー</b>を押して <b>powershell</b> と入力し、<b>Enter</b> を押します。開いた画面で <b>Ctrl+V</b> を押してから <b>Enter</b> を押し、<b>完了しました</b>と出るまで待ちます。',
+      cmdStep3: '<code>chrome://extensions</code> を開いて、右上の<b>デベロッパーモード</b>をオンにします。<b>パッケージ化されていない拡張機能を読み込む</b>を押し、<b>Ctrl+V</b> を押してから<b>フォルダーの選択</b>を押します。',
+      cmdStep4: 'このページを再読み込みします。',
+      autoNote: '新しい版は自動で入ります。前に zip で入れた人は、先にそちらを削除してください。やめる時は <code>irm ORIGIN/listen-uninstall.ps1 | iex</code> を実行します。',
       manualTitle: 'Mac の人や、コマンドを使いたくない人は zip で入れる',
       updateAvailable: (a, b) => `新しい版(${b})があります(今は ${a})。このまま参加できます。コマンドで入れた人は、自動で新しい版になります。`,
       downloadButton: '拡張機能をダウンロード(zip)',

@@ -3,7 +3,7 @@
 # 使い方(PowerShell に貼り付けて Enter):
 #   irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex
 #
-# 1. GitHub から拡張機能を %LOCALAPPDATA%\ListenTogether\extension にダウンロードする
+# 1. GitHub から拡張機能を %LOCALAPPDATA%\ListenTogether にダウンロードする
 # 2. 2時間ごとに新しい版を確かめるタスクを、タスクスケジューラに登録する(管理者の権限はいらない)
 # 3. フォルダの場所をクリップボードにコピーする(拡張機能ページの「読み込む」で貼り付ける)
 #
@@ -15,15 +15,17 @@ $ProgressPreference = 'SilentlyContinue'
 $ltUpdateUrl = 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/listen-update.ps1'
 if ($env:LT_UPDATE_SCRIPT) { $ltUpdateUrl = $env:LT_UPDATE_SCRIPT }
 $ltRoot = Join-Path $env:LOCALAPPDATA 'ListenTogether'
-$ltExt = Join-Path $ltRoot 'extension'
+$ltExt = $ltRoot
+if (Test-Path (Join-Path $ltRoot 'extension\manifest.json')) { $ltExt = Join-Path $ltRoot 'extension' } # 前の版の入れ方
 
 Write-Host ''
 Write-Host 'Listen Together: downloading the extension... / 拡張機能をダウンロードしています…' -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path $ltRoot | Out-Null
-$ltScript = Join-Path $ltRoot 'listen-update.ps1'
+$ltDl = Join-Path $env:LOCALAPPDATA 'ListenTogether-setup'
+New-Item -ItemType Directory -Force -Path $ltDl | Out-Null
+$ltScript = Join-Path $ltDl 'listen-update.ps1'
 Invoke-WebRequest -UseBasicParsing -Uri $ltUpdateUrl -OutFile $ltScript
 Invoke-Expression (Get-Content -Raw -Encoding UTF8 -Path $ltScript)
-Remove-Item $ltScript -Force
+Remove-Item $ltDl -Recurse -Force
 
 $ltAuto = $false
 if (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) {
@@ -48,14 +50,8 @@ Write-Host ''
 Write-Host ('Extension folder / 拡張機能のフォルダ:  ' + $ltExt)
 if ($ltCopied) { Write-Host '(copied to the clipboard / クリップボードにコピーしました)' }
 Write-Host ''
-Write-Host 'Next / 次にやること:'
-Write-Host '  1. Open chrome://extensions  (Edge: edge://extensions, Brave: brave://extensions)'
-Write-Host '     chrome://extensions を開きます'
-Write-Host '  2. Turn on "Developer mode" (top right) and keep it on.'
-Write-Host '     右上の「デベロッパーモード」をオンにします(オンのままにしておいてください)'
-Write-Host '  3. Click "Load unpacked", paste the folder path above, and click "Select Folder".'
-Write-Host '     「パッケージ化されていない拡張機能を読み込む」を押し、上のフォルダの場所を貼り付けて「フォルダーの選択」を押します'
-Write-Host '  4. Reload the Listen Together page. / 参加ページを再読み込みします'
+Write-Host 'Next: open chrome://extensions, turn on Developer mode, click "Load unpacked", press Ctrl+V and click "Select Folder".'
+Write-Host '次に: chrome://extensions を開いてデベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」を押して、Ctrl+V を押してから「フォルダーの選択」を押します。'
 Write-Host ''
 if ($ltAuto) {
     Write-Host 'Updates install automatically every 2 hours. / 2時間ごとに自動で新しい版になります。' -ForegroundColor Green

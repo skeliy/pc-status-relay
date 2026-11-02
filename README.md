@@ -292,10 +292,10 @@ Discord の「プレイ中」の表示(Apple Music の再生中の表示)に、�
 Chrome・Brave・Edge で使えます(Firefox は非対応)。
 
 - **エージェントを動かしているPC**: 拡張機能ページ(`chrome://extensions` など)でデベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」で **agent.py と同じフォルダの中の `extension` フォルダ** を選びます。拡張機能も自動アップデートで新しくなり、自分で読み込み直します。
-- **Discord のリンクから来た人(Windows)**: 参加ページに出るコマンド `irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex` を PowerShell に貼り付けて実行し、表示されたフォルダ(`%LOCALAPPDATA%\ListenTogether\extension`)を同じ手順で読み込みます。
+- **Discord のリンクから来た人(Windows)**: 参加ページに出るコマンド `irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex` を PowerShell に貼り付けて実行し、表示されたフォルダ(`%LOCALAPPDATA%\ListenTogether`。場所はクリップボードにコピーされる)を同じ手順で読み込みます。
   - コマンドは、拡張機能を GitHub(このリポジトリの `agent/extension`)からダウンロードし、タスクスケジューラに「ListenTogetherUpdater」というタスクを登録します。このタスクが2時間ごとに `public/listen-update.ps1` を GitHub から取ってきて実行し、新しい版があればフォルダの中身を入れ替えます。拡張機能はそれに気付いて、自分で読み込み直します(一緒に聴いている最中は、終わってから読み込み直します)。管理者の権限はいりません。
   - やめる時は、拡張機能ページで削除してから `irm https://pc-status-relay.onrender.com/listen-uninstall.ps1 | iex` を実行します(タスクとフォルダが消えます)。
-  - 更新の記録は `%LOCALAPPDATA%\ListenTogether\update.log` に残ります。
+  - 更新の記録は `%LOCALAPPDATA%\ListenTogether\update.log` に残ります。前の版で `ListenTogether\extension` に入れた人は、そのフォルダが引き続き更新されます。
 - **Discord のリンクから来た人(Mac など)**: 参加ページの「zip で入れる」からダウンロードした zip を展開して、同じ手順で読み込みます。zip で入れた場合は自動では新しくなりません。
 - **版の番号の決まり**: 拡張機能の版の先頭の数字(`3.2.0` の `3`)が上がった時だけ、古い版の人は参加ページで入れ直しを求められます。それ以外の細かい修正では「新しい版があります」と出るだけで、古い版のままでも参加できます。部屋のやり取りの形を変えるなど、古い版と一緒に使えなくなる変更をした時は、先頭の数字を上げてください。
 - どちらも、デベロッパーモードはオンのままにしておいてください(オフにすると拡張機能が止まります)。

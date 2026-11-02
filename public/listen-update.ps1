@@ -1,7 +1,7 @@
 # Listen Together - updater (一緒に聴く 拡張機能の更新係)
 #
 # GitHub (skeliy/pc-status-relay の agent/extension) に新しい版があれば、
-# %LOCALAPPDATA%\ListenTogether\extension の中身を新しくする。
+# %LOCALAPPDATA%\ListenTogether の中身を新しくする(前の版で ListenTogether\extension に入れた人は、そちらを新しくする)。
 # 拡張機能は中身が新しくなったことに自分で気付いて、読み込み直す。
 #
 # Windows のタスクスケジューラから2時間ごとに
@@ -18,13 +18,15 @@ function Update-ListenTogether {
     $base = 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/agent'
     if ($env:LT_UPDATE_BASE) { $base = $env:LT_UPDATE_BASE }
     $root = Join-Path $env:LOCALAPPDATA 'ListenTogether'
-    $ext = Join-Path $root 'extension'
-    $tmp = Join-Path $root 'download'
+    $ext = $root
+    $legacy = Join-Path $root 'extension'
+    if (Test-Path (Join-Path $legacy 'manifest.json')) { $ext = $legacy } # 前の版の入れ方(ブラウザはこちらを読み込んでいる)
+    $tmp = Join-Path $env:LOCALAPPDATA 'ListenTogether-download'
     $log = Join-Path $root 'update.log'
 
     # 文字のファイルを取ってくる(サーバーが文字として送ってこなくても読めるよう、いったんファイルに保存して読む)
     function Get-LtText([string]$uri) {
-        $p = Join-Path $root 'fetch.tmp'
+        $p = Join-Path $tmp 'fetch.tmp'
         Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $p
         $text = Get-Content -Raw -Encoding UTF8 -Path $p
         Remove-Item $p -Force
@@ -42,6 +44,8 @@ function Update-ListenTogether {
 
     try {
         New-Item -ItemType Directory -Force -Path $ext | Out-Null
+        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
         $remote = ((Get-LtText "$base/extension/manifest.json") | ConvertFrom-Json).version
         if (-not $remote) { throw 'could not read the latest version' }
@@ -52,6 +56,7 @@ function Update-ListenTogether {
             try { $local = (Get-Content -Raw -Path $localManifest | ConvertFrom-Json).version } catch { $local = '' }
         }
         if (($remote -eq $local) -and (-not $Force)) {
+            Remove-Item $tmp -Recurse -Force
             Write-LtLog "up to date ($local)"
             return
         }
@@ -62,8 +67,6 @@ function Update-ListenTogether {
             Where-Object { $_ -like 'extension/*' -and $_ -notlike '*..*' }
         if (-not $list) { throw 'could not read the file list' }
 
-        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
         foreach ($f in $list) {
             $rel = $f.Substring('extension/'.Length)
             $dest = Join-Path $tmp $rel

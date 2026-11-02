@@ -12,6 +12,8 @@
   const PAUSED = 'paused';
   const TRANSIENT = new Set(['loading', 'ended', 'idle', 'ad']);
   const LATENCY_COMP_SEC = 0.3;
+  const AUTO_END_SEC = 4; // 曲の残りがこれ以下で別の曲に変わったら「最後まで行って自動で次に進んだ」とみなす
+  const AUTO_HOLD_SEC = 8; // 流していた人から次の曲が届くのを待つ時間
 
   function now() {
     return Date.now() / 1000;
@@ -43,6 +45,8 @@
       this.prefetchAt = -1e9;
       this.sentQueueKey = '';
       this.lastQueueSend = -1e9;
+      this.prevLocal = null; // 前回見た自分のプレイヤー { id, position, duration } (曲が最後まで行って次に変わったかを見分ける)
+      this.autoHold = null; // { localId, until } 曲の終わりに勝手に始まった曲を、しばらく送らないでおく
     }
 
     // 次に流れる曲(最大3曲)。画面の表示用
@@ -99,13 +103,14 @@
       if (!ownId && this.resolveCache.get(descKey(song))) ownId = this.resolveCache.get(descKey(song)); // 先読みで見つけてあった
       this.remoteQueue = Array.isArray(data.queue) ? data.queue.slice(0, 5) : [];
       this.queueShown = this.remoteQueue;
-      const snap = { desc: song, ownId, playing, position, at: t };
+      const snap = { desc: song, ownId, playing, position, at: t, mine: false };
       // 同じ曲の情報なら、こちらで見つけた番号を引き継ぐ
       if (!snap.ownId && this.shared && sameDesc(this.shared.desc, song)) snap.ownId = this.shared.ownId;
       this.shared = snap;
       this.target = Object.assign({}, snap, { deadline: t + 25, from: fromLabel || null });
       this.lastCmd = {};
       this.notFound = null;
+      this.autoHold = null;
       this.log(`届いた: ${song.title} / ${song.artist} (${playing ? '再生' : '一時停止'} ${position.toFixed(1)}秒) from ${fromLabel}`);
     }
 
@@ -159,9 +164,12 @@
       this.service = state.service || this.service;
       if (state.isPlaying) this.needsClick = false;
       const t = this.clock();
-      if (this.target) return this._converge(state, t);
-      if (opts.broadcast !== false) this._detect(state, t, opts);
-      return [];
+      let cmds = [];
+      if (this.target) cmds = this._converge(state, t);
+      else if (opts.broadcast !== false) cmds = this._detect(state, t, opts) || [];
+      const song = state.song;
+      this.prevLocal = song && song.id ? { id: song.id, position: Number(state.position) || 0, duration: Number(song.duration) || 0 } : this.prevLocal;
+      return cmds;
     }
 
     _converge(st, t) {
@@ -204,9 +212,16 @@
       if (posOk && playOk) {
         this.target = null;
         this.needsClick = false;
-        this.shared = { desc: tg.desc, ownId: tg.ownId, playing: tg.playing, position: expected, at: t };
+        this.shared = { desc: tg.desc, ownId: tg.ownId, playing: tg.playing, position: expected, at: t, mine: false };
       }
       return cmds;
+    }
+
+    // 前回まで共有の曲を最後近くまで流していて、今は別の曲の頭にいる = 曲が終わって自動で次に進んだ
+    _autoAdvanced(sh, st) {
+      const prev = this.prevLocal;
+      if (!prev || prev.id !== sh.ownId || !prev.duration) return false;
+      return prev.position >= prev.duration - AUTO_END_SEC && (Number(st.position) || 0) < 6;
     }
 
     _broadcast(st, t) {
@@ -223,7 +238,8 @@
         ids: song.localOnly ? Object.assign({}, baseIds) : Object.assign({}, baseIds, { [st.service]: song.id }),
       };
       const position = Number(st.position) || 0;
-      this.shared = { desc, ownId: song.id, playing: !!st.isPlaying, position, at: t };
+      this.shared = { desc, ownId: song.id, playing: !!st.isPlaying, position, at: t, mine: true };
+      this.autoHold = null;
       const queue = (Array.isArray(st.queue) ? st.queue : []).slice(0, 5).map((q) => ({
         title: q.title || null,
         artist: q.artist || null,
@@ -257,7 +273,32 @@
       const sh = this.shared;
       const playing = !!st.isPlaying;
       if (!sh || song.id !== sh.ownId) {
-        if (playing && st.phase === PLAYING) this._broadcast(st, t);
+        if (!(playing && st.phase === PLAYING)) return;
+        // 曲が最後まで流れて、自分のプレイヤーが勝手に次の曲(キューの次・おすすめの自動再生)を始めた時。
+        // その曲を選んで流していたのが自分でなければ、みんなに送らない(送ると、流していた人のキューから外れてしまう)。
+        // 共有されているキューの次の曲を流すか、流していた人から次の曲が届くのを待つ
+        if (this.autoHold && this.autoHold.localId === song.id) {
+          if (t < this.autoHold.until) return;
+          this.autoHold = null; // しばらく待っても誰からも来なかった → この曲をみんなに送る
+        } else if (sh && !sh.mine && this._autoAdvanced(sh, st)) {
+          const next = (this.remoteQueue || [])[0];
+          if (next) {
+            let ownId = next.ids && this.service ? next.ids[this.service] || null : null;
+            if (!ownId && this.resolveCache.get(descKey(next))) ownId = this.resolveCache.get(descKey(next));
+            this.log(`曲が終わった → みんなのキューの次の曲: ${next.title}`);
+            this.remoteQueue = this.remoteQueue.slice(1);
+            this.queueShown = this.remoteQueue;
+            const snap = { desc: next, ownId, playing: true, position: 0, at: t, mine: false };
+            this.shared = snap;
+            this.target = Object.assign({}, snap, { deadline: t + 25, from: null });
+            this.lastCmd = {};
+            return this._converge(st, t);
+          }
+          this.log('曲が終わった → 流していた人から次の曲が届くのを待つ');
+          this.autoHold = { localId: song.id, until: t + AUTO_HOLD_SEC };
+          return;
+        }
+        this._broadcast(st, t);
         return;
       }
       if (TRANSIENT.has(st.phase)) return;
