@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <style>
@@ -28,11 +28,32 @@
   label { display:block; color: var(--muted); font-size: 12px; margin-top: 6px; }
   .notice { color: #ffd479; font-size: 12px; }
   ol { margin: 0; padding-left: 1.2em; }
+  .lang { position: relative; }
+  .lang-btn { display:flex; align-items:center; gap:5px; height:26px; padding:0 8px; border:1px solid var(--line); border-radius:999px; background:transparent; color:var(--muted); font-size:11px; font-weight:600; }
+  .lang-btn:hover { color: var(--text); }
+  .lang-menu { position:absolute; right:0; top:31px; min-width:120px; padding:4px; background:var(--card); border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 24px rgba(0,0,0,.45); z-index:5; }
+  .lang-menu button { display:flex; width:100%; justify-content:space-between; padding:6px 8px; background:none; border-radius:6px; font-weight:500; font-size:12px; }
+  .lang-menu button:hover { background: rgba(255,255,255,.06); }
+  .lang-menu .check { color: var(--accent); visibility: hidden; }
+  .lang-menu button[aria-checked="true"] .check { visibility: visible; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
-<header><img src="icons/icon48.png" alt=""><b>一緒に聴く</b><span class="ver" id="ver"></span></header>
-<div id="app"><section class="empty">読み込み中…</section></div>
+<header><img src="icons/icon48.png" alt=""><b id="brand">Listen Together</b><span class="ver" id="ver"></span>
+  <div class="lang">
+    <button class="lang-btn" id="langBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Language">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+      <span id="langLabel">EN</span>
+    </button>
+    <div class="lang-menu hidden" id="langMenu" role="menu">
+      <button type="button" role="menuitemradio" data-lang="en">English <span class="check">✓</span></button>
+      <button type="button" role="menuitemradio" data-lang="ja">日本語 <span class="check">✓</span></button>
+    </div>
+  </div>
+</header>
+<div id="app"><section class="empty">…</section></div>
+<script src="i18n.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

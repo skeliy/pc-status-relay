@@ -11,6 +11,7 @@ requirements.txt
 extension/manifest.json
 extension/background.js
 extension/content.js
+extension/i18n.js
 extension/listen.js
 extension/sync_engine.js
 extension/match.js

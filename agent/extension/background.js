@@ -10,7 +10,7 @@
 //  - 拡張機能だけの人への招待は、画面に出ないページ(offscreen.js)が待ち受ける。
 //    届いたら通知音を鳴らし、ツールバーのアイコンに印を付け、通知を出す(アイコンを押すと参加できる)
 //  - 曲のタブを閉じたら、部屋から出る(また入るには、もう一度招待を受け取る)
-importScripts('sync_engine.js');
+importScripts('sync_engine.js', 'i18n.js');
 
 const RELAY = 'https://pc-status-relay.onrender.com';
 const AGENT_URL = 'http://127.0.0.1:8788';
@@ -35,17 +35,20 @@ const agent = { data: null, okAt: 0, checkingPromise: null, retryAt: 0, failSinc
 const AGENT_GRACE_MS = 20000; // エージェントの返事が一時的に途切れても、この間は前の部屋のまま続ける
 const room = { key: null, creds: null, since: -1, members: [], known: [], you: null, owner: null, connected: false, polling: false, lastTickAt: 0 };
 let reloadScheduled = false;
-let notice = null; // { text, until } 画面に一時的に出す知らせ
+let notice = null; // { msg: { key, args }, until } 画面に一時的に出す知らせ(表示する時に今の言語で文にする)
+let lang = 'en'; // 画面の言語(初期は英語。アイコンの画面で切り替える)
+const L = (key, ...args) => PcsI18n.t(lang, key, ...args);
 
 const engine = new PcsSync.SyncEngine({ send: (data) => roomSend('state', data), log });
 
-function setNotice(text, seconds) {
-  notice = { text, until: Date.now() + (seconds || 8) * 1000 };
+function setNotice(key, args, seconds) {
+  notice = { msg: { key, args: args || [] }, until: Date.now() + (seconds || 8) * 1000 };
 }
 
 async function loadAll() {
   if (loaded) return;
-  const st = await chrome.storage.local.get(['guestCreds', 'client']);
+  const st = await chrome.storage.local.get(['guestCreds', 'client', 'lang']);
+  lang = PcsI18n.norm(st.lang);
   guest = st.guestCreds || null;
   client = st.client || null;
   loaded = true;
@@ -107,9 +110,9 @@ async function handleInbox(messages) {
       chrome.notifications.create('invite:' + m.code, {
         type: 'basic',
         iconUrl: 'icons/icon128.png',
-        title: '一緒に聴く',
-        message: `${m.fromLabel} から「一緒に聴く」の招待が届きました(${m.owner} の部屋)`,
-        buttons: [{ title: '参加する' }, { title: '断る' }],
+        title: L('brand'),
+        message: L('notifyMessage', m.fromLabel, m.owner),
+        buttons: [{ title: L('join') }, { title: L('decline') }],
         priority: 2,
       });
     } catch (e) {}
@@ -126,7 +129,7 @@ async function handleInbox(messages) {
 
 async function acceptInvite(code) {
   const inv = invites.get(code);
-  if (!inv) return { ok: false, error: '招待の期限が切れました' };
+  if (!inv) return { ok: false, error: 'inviteExpired' };
   invites.delete(code);
   chrome.notifications.clear('invite:' + code);
   try {
@@ -138,7 +141,7 @@ async function acceptInvite(code) {
     const j = await resp.json();
     if (!resp.ok) {
       updateBadge();
-      return { ok: false, error: j.error === 'invite expired' ? '招待の期限が切れました' : '参加できませんでした(部屋が閉じている可能性があります)' };
+      return { ok: false, error: j.error === 'invite expired' ? 'inviteExpired' : 'joinFailedClosed' };
     }
     guest = { relay: RELAY, room: inv.room, token: j.token, label: client.label, service: client.service, owner: j.owner };
     await chrome.storage.local.set({ guestCreds: guest });
@@ -148,7 +151,7 @@ async function acceptInvite(code) {
     return { ok: true, opened };
   } catch (e) {
     updateBadge();
-    return { ok: false, error: 'サーバーに繋がりませんでした' };
+    return { ok: false, error: 'noServer' };
   }
 }
 
@@ -182,14 +185,14 @@ function updateBadge() {
   if (invites.size > 0) {
     chrome.action.setBadgeBackgroundColor({ color: '#fa2d48' });
     chrome.action.setBadgeText({ text: '!' });
-    chrome.action.setTitle({ title: '「一緒に聴く」の招待が届いています(押すと参加できます)' });
+    chrome.action.setTitle({ title: L('titleInvite') });
   } else if (others > 0) {
     chrome.action.setBadgeBackgroundColor({ color: '#3ecf8e' });
     chrome.action.setBadgeText({ text: String(others + 1) });
-    chrome.action.setTitle({ title: '一緒に聴いています: ' + room.members.map((m) => m.label).join('、') });
+    chrome.action.setTitle({ title: L('titleListening', room.members.map((m) => m.label).join(L('sep'))) });
   } else {
     chrome.action.setBadgeText({ text: '' });
-    chrome.action.setTitle({ title: 'PC Status 一緒に聴く' });
+    chrome.action.setTitle({ title: L('brand') });
   }
 }
 
@@ -327,14 +330,14 @@ function handleRoomMessage(m, serverNow) {
   if (m.type === 'state') {
     engine.onRemote(m.data || {}, age, m.fromLabel);
   } else if (m.type === 'joined') {
-    if (m.from !== room.you) setNotice(`🎧 ${m.fromLabel} が入りました`, 6);
+    if (m.from !== room.you) setNotice('joinedNotice', [m.fromLabel], 6);
     // 新しく来た人にも今の曲を流すため、こちらで流れていれば送り直す
     const p = primaryTab();
     if (p) setTimeout(() => engine.announce(p.state), 300);
   } else if (m.type === 'left') {
-    setNotice(`${m.fromLabel} が出ました`, 6);
+    setNotice('leftNotice', [m.fromLabel], 6);
   } else if (m.type === 'declined') {
-    setNotice(`${m.fromLabel} は招待を断りました`, 6);
+    setNotice('declinedNotice', [m.fromLabel], 6);
   }
 }
 
@@ -344,7 +347,7 @@ function onKicked(c) {
   if (c.mode === 'guest') {
     guest = null;
     chrome.storage.local.remove('guestCreds');
-    setNotice('部屋から外れました(部屋が終了したか、閉じられました)', 10);
+    setNotice('kicked', [], 10);
     useCreds(null);
   } else {
     agent.okAt = 0; // エージェントに新しい鍵をもらい直す
@@ -452,8 +455,9 @@ function buildUi(isPrimary, state) {
   const a = agent.data || {};
   const aui = a.ui || {};
   const mode = creds ? creds.mode : agent.data ? 'agent' : 'none';
-  const n = notice && Date.now() < notice.until ? notice.text : null;
+  const n = notice && Date.now() < notice.until ? notice.msg : null;
   return {
+    lang,
     mode,
     room: creds
       ? { id: creds.id, owner: room.owner || creds.owner || null, members: room.members, known: room.known, you: room.you, role: creds.role || 'guest' }
@@ -478,11 +482,12 @@ async function handleAction(body) {
     await leaveGuestRoom('button');
   } else if (action === 'invite') {
     const r = await roomPost('invite', { target: body.target });
-    const names = ((r && r.invited) || []).map((x) => x.label).join('、');
-    setNotice(names ? `${names} に招待を送りました` : '招待を送れませんでした', 6);
+    const names = ((r && r.invited) || []).map((x) => x.label).join(L('sep'));
+    if (names) setNotice('invitedTo', [names], 6);
+    else setNotice('inviteFailed', [], 6);
   } else if (action === 'accept-invite') {
     const r = await acceptInvite(body.code);
-    if (!r.ok) setNotice(r.error, 8);
+    if (!r.ok) setNotice(r.error, [], 8);
   } else if (action === 'decline-invite') {
     await declineInvite(body.code);
   } else if (['request', 'cancel', 'stop', 'accept', 'decline'].includes(action) && agent.data) {
@@ -595,6 +600,13 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 ensureOffscreen();
 loadAll();
 
+// アイコンの画面で言語を切り替えた時
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.lang) return;
+  lang = PcsI18n.norm(changes.lang.newValue);
+  updateBadge();
+});
+
 // 読み込み直した・入れた直後は、もう開いている音楽サービスのタブにも仕組みを入れ直す
 // (タブを再読み込みすると曲が止まってしまうので、再読み込みはしない)
 chrome.runtime.onInstalled.addListener(async () => {
@@ -604,7 +616,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     for (const tab of list) {
       try {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: site.main, world: 'MAIN' });
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js'] });
       } catch (e) {}
     }
   }

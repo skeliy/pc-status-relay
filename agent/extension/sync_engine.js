@@ -133,11 +133,11 @@
         return;
       }
       if (cmd.action === 'load' && result.error === 'notfound') {
-        const title = (cmd.desc && cmd.desc.title) || 'この曲';
-        this.log(`見つからなかった: ${title}`);
+        const title = (cmd.desc && cmd.desc.title) || null;
+        this.log(`見つからなかった: ${title || '?'}`);
         this.notFound = { localId: result.localId || null, title };
         this.target = null;
-        this._setNotice(`「${title}」が見つからなかったので、この曲はスキップします`, 10);
+        this._setNotice({ key: 'skipped', args: [title] }, 10); // 表示する時に今の言語で文にする
         return;
       }
       this.log(`指示が失敗: ${cmd.action} ${result.error}`);

@@ -1,0 +1,165 @@
+// 画面に出る文(英語と日本語)。初期は英語で、ツールバーのアイコンを押した画面の右上から切り替えられる。
+// 裏方(background.js)・音楽ページの表示(content.js)・アイコンの画面(popup.js)で共通に使う。
+(function () {
+  const S = {
+    en: {
+      brand: 'Listen Together',
+      sep: ', ',
+      you: 'You',
+      youSuffix: ' (you)',
+      roomOf: (o) => `${o}'s room`,
+      join: 'Join',
+      decline: 'Decline',
+      allow: 'Allow',
+      deny: 'Deny',
+      leave: 'Leave',
+      end: 'End',
+      cancel: 'Cancel',
+      invite: 'Invite',
+      inviteAll: 'Invite all',
+      play: 'Play',
+      save: 'Save',
+      saved: 'Saved',
+      // 音楽ページの右下
+      extOutdated: 'This extension is out of date. On the extensions page, check the folder it loads from and press Update.',
+      spotifyLogin: 'Log in to Spotify to listen together.',
+      requestFrom: (l) => `🎵 ${l} wants to listen together`,
+      autoplayBlocked: '▶ Your browser blocked autoplay',
+      autoplayHint: 'Click to play the same song as everyone.',
+      inviteFrom: (f) => `🎵 ${f} invited you to listen together`,
+      connecting: '🎧 Connecting to the room…',
+      listeningCount: (n) => `🎧 Listening together (${n})`,
+      participants: (names) => `Listening: ${names}`,
+      next: 'Next: ',
+      ownerHint: 'Press End to close the room for everyone.',
+      guestHint: 'Closing this tab leaves the room.',
+      requesting: '📨 Asking to listen together…',
+      waitingApproval: 'Waiting for them to accept.',
+      inRoom: (o) => `🎧 You're in ${o}'s room`,
+      inRoomHint: 'When others join, the same song will play.',
+      fabTitle: (h) => `Ask a friend to listen together${h ? ` (${h})` : ''}`,
+      inviteKnown: 'Invite people who joined before',
+      // アイコンの画面
+      language: 'Language',
+      noBackground: 'Couldn’t reach the extension. Please open it again.',
+      invitesTitle: 'Invites',
+      requestShort: (l) => `${l} is asking to listen together`,
+      connectingSuffix: ' (connecting…)',
+      endAll: 'End (everyone leaves)',
+      connectingShort: 'Connecting…',
+      openMusic: 'Open a music service page to connect to the room.',
+      upNext: 'Up next',
+      previous: 'People who joined before',
+      online: 'Online',
+      offline: 'Offline',
+      notConnectedAgent: 'Not connected to a room. Open a music service page.',
+      notJoined: 'You haven’t joined a room yet. Open a Listen Together link from a friend, or wait for an invite. When one arrives, you’ll hear a sound and see a mark on this icon.',
+      yourSettings: 'Your settings',
+      nameLabel: 'Name (shown to everyone)',
+      serviceLabel: 'Your music service',
+      // 一時的な知らせ
+      joinedNotice: (l) => `🎧 ${l} joined`,
+      leftNotice: (l) => `${l} left`,
+      declinedNotice: (l) => `${l} declined the invite`,
+      kicked: 'You’re no longer in the room (it ended or was closed).',
+      invitedTo: (names) => `Invite sent to ${names}`,
+      inviteFailed: 'Couldn’t send the invite.',
+      inviteExpired: 'The invite has expired.',
+      joinFailedClosed: 'Couldn’t join (the room may be closed).',
+      noServer: 'Couldn’t reach the server.',
+      skipped: (t) => `Couldn’t find “${t || 'this song'}”, so it was skipped.`,
+      // 通知・アイコンの説明
+      notifyMessage: (f, o) => `${f} invited you to listen together (${o}'s room)`,
+      titleInvite: 'You have a Listen Together invite (click to join)',
+      titleListening: (names) => `Listening together: ${names}`,
+    },
+    ja: {
+      brand: '一緒に聴く',
+      sep: '、',
+      you: 'あなた',
+      youSuffix: '(あなた)',
+      roomOf: (o) => `${o} の部屋`,
+      join: '参加する',
+      decline: '断る',
+      allow: '許可',
+      deny: '拒否',
+      leave: '退出',
+      end: '終了',
+      cancel: '取り消し',
+      invite: '招待',
+      inviteAll: '全員を招待',
+      play: '再生',
+      save: '保存',
+      saved: '保存しました',
+      extOutdated: '拡張機能が古いままです。拡張機能のページで、読み込み元のフォルダを確認して「更新」を押してください。',
+      spotifyLogin: 'Spotify にログインすると、一緒に聴けます。',
+      requestFrom: (l) => `🎵 ${l} が一緒に聴くのをリクエストしています`,
+      autoplayBlocked: '▶ ブラウザが自動再生を止めました',
+      autoplayHint: '押すと、みんなと同じ曲が流れます。',
+      inviteFrom: (f) => `🎵 ${f} から「一緒に聴く」の招待が届いています`,
+      connecting: '🎧 部屋に接続しています…',
+      listeningCount: (n) => `🎧 一緒に聴いています(${n}人)`,
+      participants: (names) => `参加中: ${names}`,
+      next: '次: ',
+      ownerHint: '「終了」を押すと、全員が部屋から出ます。',
+      guestHint: 'このタブを閉じると部屋から出ます。',
+      requesting: '📨 一緒に聴くのをリクエスト中…',
+      waitingApproval: '相手の許可を待っています。',
+      inRoom: (o) => `🎧 ${o} の部屋に入っています`,
+      inRoomHint: 'ほかの人が来ると、同じ曲が流れ始めます。',
+      fabTitle: (h) => `友達に「一緒に聴く」をリクエスト${h ? `(${h})` : ''}`,
+      inviteKnown: '前に参加した人を招待',
+      language: '言語',
+      noBackground: '拡張機能の裏方に繋がりませんでした。もう一度開いてください。',
+      invitesTitle: '招待',
+      requestShort: (l) => `${l} がリクエストしています`,
+      connectingSuffix: '(接続中…)',
+      endAll: '終了(全員が出ます)',
+      connectingShort: '接続しています…',
+      openMusic: '音楽サービスのページを開くと、部屋に繋がります。',
+      upNext: '次に流れる曲',
+      previous: '前に参加した人',
+      online: 'オンライン',
+      offline: 'オフライン',
+      notConnectedAgent: '部屋に繋がっていません。音楽サービスのページを開いてください。',
+      notJoined: 'まだ部屋に入っていません。友達から届いた「一緒に聴く」のリンクを開くか、招待が届くのを待ってください。招待が届くと、音が鳴ってこのアイコンに印が付きます。',
+      yourSettings: 'あなたの設定',
+      nameLabel: '名前(みんなに表示されます)',
+      serviceLabel: '使っている音楽サービス',
+      joinedNotice: (l) => `🎧 ${l} が入りました`,
+      leftNotice: (l) => `${l} が出ました`,
+      declinedNotice: (l) => `${l} は招待を断りました`,
+      kicked: '部屋から外れました(部屋が終了したか、閉じられました)。',
+      invitedTo: (names) => `${names} に招待を送りました`,
+      inviteFailed: '招待を送れませんでした。',
+      inviteExpired: '招待の期限が切れました。',
+      joinFailedClosed: '参加できませんでした(部屋が閉じている可能性があります)。',
+      noServer: 'サーバーに繋がりませんでした。',
+      skipped: (t) => `「${t || 'この曲'}」が見つからなかったので、この曲はスキップします。`,
+      notifyMessage: (f, o) => `${f} から「一緒に聴く」の招待が届きました(${o} の部屋)`,
+      titleInvite: '「一緒に聴く」の招待が届いています(押すと参加できます)',
+      titleListening: (names) => `一緒に聴いています: ${names}`,
+    },
+  };
+
+  function norm(lang) {
+    return lang === 'ja' ? 'ja' : 'en';
+  }
+
+  // t('ja', 'roomOf', 'Skeliy') → 'Skeliy の部屋'
+  function t(lang, key, ...args) {
+    const table = S[norm(lang)];
+    const v = key in table ? table[key] : S.en[key];
+    if (v === undefined) return key;
+    return typeof v === 'function' ? v(...args) : v;
+  }
+
+  // 知らせは { key, args } の形で持っておき、表示する時に今の言語で文にする(古い形の文字列もそのまま出す)
+  function fmt(lang, notice) {
+    if (!notice) return '';
+    if (typeof notice === 'string') return notice;
+    return t(lang, notice.key, ...(notice.args || []));
+  }
+
+  globalThis.PcsI18n = { t, fmt, norm, LANGS: [['en', 'English'], ['ja', '日本語']] };
+})();

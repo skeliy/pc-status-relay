@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "PC Status 一緒に聴く",
-  "version": "3.0.1",
-  "description": "Apple Music・Spotify・YouTube Music・YouTube のWeb版で、友達と同じ曲を同時に聴きます(サービスが違っても大丈夫)。",
+  "name": "Listen Together",
+  "version": "3.1.0",
+  "description": "Listen to the same song at the same time with friends on the web players of Apple Music, Spotify, YouTube Music and YouTube, even across different services.",
   "permissions": [
     "scripting",
     "storage",
@@ -74,6 +74,7 @@
         "https://www.youtube.com/*"
       ],
       "js": [
+        "i18n.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -90,7 +91,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "PC Status 一緒に聴く",
+    "default_title": "Listen Together",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

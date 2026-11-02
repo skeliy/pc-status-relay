@@ -118,37 +118,39 @@
     lastKey = key;
     wrap.textContent = '';
     if (!ui || (ui.mode === 'none' && !(ui.invites || []).length)) return; // 部屋にも入っておらず、招待も無い
+    const T = (k, ...a) => PcsI18n.t(ui.lang, k, ...a); // 画面の言語(アイコンの画面で切り替える)
+    const person = (label, service) => (ui.lang === 'ja' ? `${label}(${SERVICE_NAMES[service] || '?'})` : `${label} (${SERVICE_NAMES[service] || '?'})`);
 
     if (ui.versionMismatch) {
-      wrap.appendChild(pill([text('拡張機能が古いままです。拡張機能のページで、読み込み元のフォルダを確認して「更新」を押してください', 'muted')]));
+      wrap.appendChild(pill([text(T('extOutdated'), 'muted')]));
     }
     if (ui.loginNeeded) {
-      wrap.appendChild(pill([text('Spotify にログインすると、一緒に聴けます', 'muted')]));
+      wrap.appendChild(pill([text(T('spotifyLogin'), 'muted')]));
     }
     if (ui.notice) {
-      wrap.appendChild(pill([text(ui.notice, 'muted')]));
+      wrap.appendChild(pill([text(PcsI18n.fmt(ui.lang, ui.notice), 'muted')]));
     }
     for (const req of ui.incoming || []) {
       wrap.appendChild(
-        pill([text(`🎵 ${req.label} が一緒に聴くのをリクエストしています`)], [
-          button('許可', () => sendAction('accept', { sessionId: req.sessionId }), true),
-          button('拒否', () => sendAction('decline', { sessionId: req.sessionId })),
+        pill([text(T('requestFrom', req.label))], [
+          button(T('allow'), () => sendAction('accept', { sessionId: req.sessionId }), true),
+          button(T('deny'), () => sendAction('decline', { sessionId: req.sessionId })),
         ])
       );
     }
     if (ui.needsClick) {
       wrap.appendChild(
-        pill([text('▶ ブラウザが自動再生を止めました'), text('押すと、みんなと同じ曲が流れます', 'muted')], [
-          button('再生', () => window.postMessage({ source: SRC_CMD, cmd: { id: -1, action: 'play' } }, '*'), true),
+        pill([text(T('autoplayBlocked')), text(T('autoplayHint'), 'muted')], [
+          button(T('play'), () => window.postMessage({ source: SRC_CMD, cmd: { id: -1, action: 'play' } }, '*'), true),
         ])
       );
     }
 
     for (const inv of ui.invites || []) {
       wrap.appendChild(
-        pill([text(`🎵 ${inv.fromLabel} から「一緒に聴く」の招待が届いています`), text(`${inv.owner} の部屋`, 'muted')], [
-          button('参加する', () => sendAction('accept-invite', { code: inv.code }), true),
-          button('断る', () => sendAction('decline-invite', { code: inv.code })),
+        pill([text(T('inviteFrom', inv.fromLabel)), text(T('roomOf', inv.owner), 'muted')], [
+          button(T('join'), () => sendAction('accept-invite', { code: inv.code }), true),
+          button(T('decline'), () => sendAction('decline-invite', { code: inv.code })),
         ])
       );
     }
@@ -157,30 +159,30 @@
     const members = room ? room.members || [] : [];
     const others = room ? members.filter((m) => m.id !== room.you) : [];
     if (room && !ui.connected) {
-      wrap.appendChild(pill([text('🎧 部屋に接続しています…', 'muted')]));
+      wrap.appendChild(pill([text(T('connecting'), 'muted')]));
     } else if (room && others.length > 0) {
       // 誰が参加しているかを、自分も含めて全員並べる
-      const names = members.map((m) => `${m.id === room.you ? 'あなた' : m.label}(${SERVICE_NAMES[m.service] || '?'})`).join('、');
-      const leaveLabel = room.role === 'owner' ? '終了' : '退出';
-      const lines = [text(`🎧 一緒に聴いています(${members.length}人)`), text(`参加中: ${names}`, 'muted')];
+      const names = members.map((m) => person(m.id === room.you ? T('you') : m.label, m.service)).join(T('sep'));
+      const leaveLabel = room.role === 'owner' ? T('end') : T('leave');
+      const lines = [text(T('listeningCount', members.length)), text(T('participants', names), 'muted')];
       if ((ui.queue || []).length) {
-        lines.push(text('次: ' + ui.queue.map((q) => q.title).join(' → '), 'muted'));
+        lines.push(text(T('next') + ui.queue.map((q) => q.title).join(' → '), 'muted'));
       }
-      lines.push(text(room.role === 'owner' ? '「終了」を押すと、全員が部屋から出ます' : 'このタブを閉じると部屋から出ます', 'muted'));
+      lines.push(text(room.role === 'owner' ? T('ownerHint') : T('guestHint'), 'muted'));
       wrap.appendChild(pill(lines, [button(leaveLabel, () => sendAction(ui.mode === 'guest' ? 'leave' : 'stop'))]));
     } else if (ui.pending) {
       wrap.appendChild(
-        pill([text('📨 一緒に聴くのをリクエスト中…'), text('相手の許可を待っています', 'muted')], [button('取り消し', () => sendAction('cancel'))])
+        pill([text(T('requesting')), text(T('waitingApproval'), 'muted')], [button(T('cancel'), () => sendAction('cancel'))])
       );
     } else if (ui.mode === 'guest') {
       wrap.appendChild(
-        pill([text(`🎧 ${(room && room.owner) || ''} の部屋に入っています`), text('ほかの人が来ると、同じ曲が流れ始めます', 'muted')], [
-          button('退出', () => sendAction('leave')),
+        pill([text(T('inRoom', (room && room.owner) || '')), text(T('inRoomHint'), 'muted')], [
+          button(T('leave'), () => sendAction('leave')),
         ])
       );
     } else if (ui.mode === 'agent' && !(ui.incoming || []).length) {
       wrap.appendChild(
-        el('button', { class: 'fab', title: `友達に「一緒に聴く」をリクエスト(${ui.hotkey || ''})`, text: '🎧', onclick: () => sendAction('request') })
+        el('button', { class: 'fab', title: T('fabTitle', ui.hotkey || ''), text: '🎧', onclick: () => sendAction('request') })
       );
     }
 
@@ -189,10 +191,10 @@
     if (known.length) {
       wrap.appendChild(
         pill(
-          [text('前に参加した人を招待', 'muted'), ...known.map((k) => text(`${k.label}(${SERVICE_NAMES[k.service] || '?'})`))],
+          [text(T('inviteKnown'), 'muted'), ...known.map((k) => text(person(k.label, k.service)))],
           known.length === 1
-            ? [button('招待', () => sendAction('invite', { target: known[0].key }), true)]
-            : [button('全員を招待', () => known.forEach((k) => sendAction('invite', { target: k.key })), true)]
+            ? [button(T('invite'), () => sendAction('invite', { target: known[0].key }), true)]
+            : [button(T('inviteAll'), () => known.forEach((k) => sendAction('invite', { target: k.key })), true)]
         )
       );
     }
