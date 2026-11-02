@@ -14,6 +14,7 @@
   const LATENCY_COMP_SEC = 0.3;
   const AUTO_END_SEC = 4; // 曲の残りがこれ以下で別の曲に変わったら「最後まで行って自動で次に進んだ」とみなす
   const AUTO_HOLD_SEC = 8; // 流していた人から次の曲が届くのを待つ時間
+  const STABLE_SEC = 1.0; // 合った状態がこの時間続いたら「合った」とする
 
   function now() {
     return Date.now() / 1000;
@@ -91,7 +92,10 @@
       if (!cmd) return;
       if (result.ok) {
         if (cmd.action === 'load' && result.resolvedId) {
-          if (this.target && sameDesc(this.target.desc, cmd.desc)) this.target.ownId = result.resolvedId;
+          if (this.target && sameDesc(this.target.desc, cmd.desc)) {
+            this.target.ownId = result.resolvedId;
+            this.target.loaded = true; // こちらで曲を流し終えた(この後に曲が変わったら、聴いている人が自分で選んだ曲)
+          }
           if (this.shared && sameDesc(this.shared.desc, cmd.desc)) {
             this.shared.ownId = result.resolvedId;
             this.shared.desc = withId(this.shared.desc, this.service, result.resolvedId);
@@ -148,6 +152,10 @@
       if (t > tg.deadline) {
         this.log('相手の状態に合わせきれないまま時間切れ');
         this.target = null;
+        // 合わせきれなかった自分の状態を「新しく選んだ・シークした」と勘違いして送らないよう、今の状態を基準にしておく
+        if (st.song && st.song.id) {
+          this.shared = { desc: tg.desc, ownId: st.song.id, playing: !!st.isPlaying, position: Number(st.position) || 0, at: t, mine: false };
+        }
         return [];
       }
       if (!tg.ownId && this.service && tg.desc.ids && tg.desc.ids[this.service]) tg.ownId = tg.desc.ids[this.service];
@@ -155,9 +163,18 @@
       const since = (a) => t - (this.lastCmd[a] == null ? -1e9 : this.lastCmd[a]);
       const localId = st.song && st.song.id;
 
+      // 曲を流し終えた後に、聴いている人が自分で別の曲を選んだ → 合わせるのをやめて、その曲をみんなに送る
+      const loadingNow = Object.values(this.pending).some((c) => c.action === 'load');
+      if (tg.loaded && tg.ownId && localId && localId !== tg.ownId && !loadingNow && since('load') > 3 && st.phase === PLAYING) {
+        this.log('合わせている途中で、自分で別の曲を選んだ');
+        this.target = null;
+        return this._detect(st, t, {}) || [];
+      }
       if (!tg.ownId || localId !== tg.ownId) {
         // 曲を探して流す(探すのに時間がかかることがあるので、少し長めに待ってから出し直す)
-        if (since('load') > 10) {
+        // 前に出した「曲を流す」の結果がまだ来ていなければ待つ(探すのに時間がかかる Spotify などで、二重に流さないため)
+        const loading = Object.values(this.pending).some((c) => c.action === 'load');
+        if (since('load') > (loading ? 30 : 10)) {
           return [this._cmd('load', { songId: tg.ownId, desc: tg.desc, position: expected, play: tg.playing })];
         }
         return [];
@@ -175,10 +192,17 @@
         cmds.push(this._cmd(tg.playing ? 'play' : 'pause'));
         this.lastCmd.play = this.clock();
       }
+      // 画面の表示だけ一瞬変わって、実際の再生位置が動いていないことがある(Spotify のシークなど)。
+      // 合った状態が少し続いてから「合った」とする
       if (posOk && playOk) {
-        this.target = null;
-        this.needsClick = false;
-        this.shared = { desc: tg.desc, ownId: tg.ownId, playing: tg.playing, position: expected, at: t, mine: false };
+        if (tg.okSince == null) tg.okSince = t;
+        if (t - tg.okSince >= STABLE_SEC) {
+          this.target = null;
+          this.needsClick = false;
+          this.shared = { desc: tg.desc, ownId: tg.ownId, playing: tg.playing, position: expected, at: t, mine: false };
+        }
+      } else {
+        tg.okSince = null;
       }
       return cmds;
     }

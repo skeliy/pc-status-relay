@@ -48,16 +48,53 @@
   }
 
   function nowPlayingRoot() {
-    return $('[data-testid="now-playing-widget"]') || $('[data-testid="now-playing-bar"]') || $('footer');
+    return $('[data-testid="now-playing-widget"]') || $('[data-testid="now-playing-widget-v2"]') || $('[data-testid="now-playing-bar"]') || $('footer');
   }
+
+  function norm(s) {
+    return String(s || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  // 今の曲の曲名とアーティスト(OS に知らせている再生情報 → 画面下の表示、の順に見る)
+  function currentMeta() {
+    const meta = navigator.mediaSession && navigator.mediaSession.metadata;
+    if (meta && meta.title) return { title: meta.title, artist: meta.artist || '', album: meta.album || '' };
+    const root = nowPlayingRoot();
+    if (!root) return { title: '', artist: '', album: '' };
+    const titleEl = $('[data-testid="context-item-info-title"]', root) || $('[data-testid="context-item-link"]', root) || $('a[href*="/album/"], a[href*="/track/"]', root);
+    const artists = $$('a[href*="/artist/"]', root).map((a) => a.textContent.trim()).filter(Boolean);
+    return { title: titleEl ? titleEl.textContent.trim() : '', artist: artists.join(', '), album: '' };
+  }
+
+  function metaKey(m) {
+    return norm(m.title) + '|' + norm(m.artist);
+  }
+
+  // こちらで流した曲(曲名・アーティスト → Spotify の曲の番号)。
+  // 今の Spotify の画面下の表示には曲そのもののリンクが無いので、曲名で見分ける
+  const loadedIds = new Map();
 
   function currentTrackId() {
     const root = nowPlayingRoot();
-    if (!root) return null;
-    for (const a of $$('a[href]', root)) {
-      const id = trackIdFromHref(a.getAttribute('href'));
-      if (id) return id;
+    if (root) {
+      for (const a of $$('a[href]', root)) {
+        let href = a.getAttribute('href') || '';
+        try {
+          href = decodeURIComponent(href);
+        } catch (e) {}
+        const id = trackIdFromHref(href);
+        if (id) return id;
+      }
     }
+    const m = currentMeta();
+    return m.title ? loadedIds.get(metaKey(m)) || null : null;
+  }
+
+  // 再生ボタンの表示(言語によって違う)。'pause' = 今流れている(押すと止まる)、'play' = 止まっている
+  function buttonState(btn) {
+    const label = String((btn && (btn.getAttribute('aria-label') || btn.getAttribute('title'))) || '');
+    if (/pause|一時停止|일시정지|暂停|暫停|pausa|pausar/i.test(label)) return 'pause';
+    if (/play|再生|재생|播放|reproducir|lecture/i.test(label)) return 'play';
     return null;
   }
 
@@ -86,6 +123,8 @@
     const s = navigator.mediaSession && navigator.mediaSession.playbackState;
     if (s === 'playing') return true;
     if (s === 'paused') return false;
+    const b = buttonState($('[data-testid="control-button-playpause"]'));
+    if (b) return b === 'pause';
     const text = ($('[data-testid="playback-position"]') || {}).textContent || '';
     if (text !== lastPosText) {
       lastPosText = text;
@@ -100,13 +139,12 @@
 
   function readState() {
     if (!$('[data-testid="now-playing-bar"]') && !$('[data-testid="player-controls"]')) return { available: false, service: SERVICE };
-    const id = currentTrackId();
-    const meta = navigator.mediaSession && navigator.mediaSession.metadata;
+    const meta = currentMeta();
+    const trackId = currentTrackId();
+    // 曲の番号が分からない曲(自分で選んだ曲)は、曲名とアーティストで見分ける。番号は相手に送らず、曲名で探してもらう
+    const id = trackId || (meta.title ? 'meta:' + metaKey(meta) : null);
     const playing = isPlayingNow();
     const { position, duration } = readPosition();
-    const root = nowPlayingRoot();
-    const titleEl = root && ($('[data-testid="context-item-info-title"]', root) || $('[data-testid="context-item-link"]', root));
-    const artistEl = root && ($('[data-testid="context-item-info-artist"]', root) || $('a[href*="/artist/"]', root));
     return {
       available: true,
       loggedIn: loggedIn(),
@@ -116,9 +154,10 @@
       song: id
         ? {
             id,
-            title: (meta && meta.title) || (titleEl && titleEl.textContent) || null,
-            artist: (meta && meta.artist) || (artistEl && artistEl.textContent) || null,
-            album: (meta && meta.album) || null,
+            localOnly: !trackId,
+            title: meta.title || null,
+            artist: meta.artist || null,
+            album: meta.album || null,
             duration,
             isrc: null,
           }
@@ -195,12 +234,12 @@
     if (h) {
       try {
         h({ action: want ? 'play' : 'pause' });
-      } catch (e) {
-        clickPlayPause();
-      }
-    } else {
-      clickPlayPause();
+        return;
+      } catch (e) {}
     }
+    // 下の再生ボタンは「再生/一時停止」の切り替え。表示を確かめて、逆にしてしまう時は押さない
+    const st = buttonState($('[data-testid="control-button-playpause"]'));
+    if (st === null || st === (want ? 'play' : 'pause')) clickPlayPause();
   }
 
   function seekTo(sec) {
@@ -227,7 +266,7 @@
   }
 
   async function load(cmd) {
-    if (!loggedIn()) return { ok: false, error: 'Spotify にログインしていません' };
+    if (!loggedIn()) return { ok: false, error: 'not logged in to Spotify' };
     const before = readState();
     const id = cmd.songId || (await resolve(cmd.desc || {}));
     if (!id) return { ok: false, error: 'notfound', localId: before.song ? before.song.id : null };
@@ -237,11 +276,19 @@
         const page = $('[data-testid="track-page"]');
         return page && ($('[data-testid="action-bar-row"] [data-testid="play-button"]', page) || $('[data-testid="play-button"]', page));
       }, 8000);
-      if (!btn) return { ok: false, error: '曲のページの再生ボタンが見つかりません' };
+      if (!btn) return { ok: false, error: 'no play button on the track page' };
       await sleep(300);
-      btn.click();
-      const ok = await waitFor(() => currentTrackId() === id, 8000);
-      if (!ok) return { ok: false, error: '曲を再生できませんでした' };
+      const page = $('[data-testid="track-page"]');
+      const pageTitle = norm((($('[data-testid="entityTitle"]', page) || $('h1', page) || {}).textContent) || '');
+      const before = metaKey(currentMeta());
+      // 曲のページの再生ボタンは「再生/一時停止」の切り替え。もう流れている曲で押すと止まってしまうので、その時は押さない
+      if (buttonState(btn) !== 'pause') btn.click();
+      const ok = await waitFor(() => {
+        const m = currentMeta();
+        return m.title && ((pageTitle && norm(m.title) === pageTitle) || metaKey(m) !== before);
+      }, 8000);
+      if (!ok) return { ok: false, error: 'could not start the song' };
+      loadedIds.set(metaKey(currentMeta()), id); // 次からは、この曲名ならこの番号の曲と分かる
     }
     if (cmd.play) await setPlaying(true);
     else await setPlaying(false);
