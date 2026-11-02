@@ -124,10 +124,17 @@
   // 公式の音源(「アーティスト - Topic」の動画)はふつうの検索では出てこないことが多いので、「topic」を付けた検索もして混ぜる
   async function search(desc) {
     const query = [desc.title, desc.artist].filter(Boolean).join(' ');
-    const [plain, topic] = await Promise.all([searchOnce(query), searchOnce(query + ' topic').catch(() => [])]);
+    // 英語の名前(alt)があれば、それでも探す(日本のストアのカタカナ名だと見つかりにくいため)
+    const en = desc.alt && (desc.alt.title || desc.alt.artist) ? [desc.alt.title || desc.title, desc.alt.artist || desc.artist].filter(Boolean).join(' ') : null;
+    const main = en || query;
+    const [plain, topic, orig] = await Promise.all([
+      searchOnce(main),
+      searchOnce(main + ' topic').catch(() => []),
+      en && en !== query ? searchOnce(query).catch(() => []) : Promise.resolve([]),
+    ]);
     const seen = new Set();
     const out = [];
-    for (const c of plain.concat(topic.filter((x) => x.preferred))) {
+    for (const c of plain.concat(topic.filter((x) => x.preferred), orig)) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
       out.push(c);

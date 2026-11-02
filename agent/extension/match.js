@@ -55,7 +55,7 @@
 
   // candidates: [{ id, title, artist, duration }] / desc: { title, artist, duration }
   // 別バージョンを表す言葉(元の曲名に無いのに候補の曲名にあれば、別バージョンとみなす)
-  const VERSION_WORDS = /\b(live|acoustic|remix(?:ed)?|cover|karaoke|instrumental|inst|sped\s*up|speed\s*up|slowed|reverb|nightcore|8d|demo|unplugged|orchestral|piano\s*ver(?:sion)?|lofi|lo-fi)\b|ライブ|弾いてみた|歌ってみた|カバー|リミックス|アコースティック|カラオケ|オルゴール/gi;
+  const VERSION_WORDS = /\b(live|acoustic|remix(?:ed)?|cover|karaoke|instrumental|inst|sped\s*up|speed\s*up|slowed|reverb|nightcore|8d|demo|unplugged|orchestral|piano\s*ver(?:sion)?|lofi|lo-fi|backing|made popular|made famous|originally performed|in the style of|tribute)\b|ライブ|弾いてみた|歌ってみた|カバー|リミックス|アコースティック|カラオケ|オルゴール/gi;
   function versionWords(s) {
     return new Set((String(s || '').normalize('NFKC').toLowerCase().match(VERSION_WORDS) || []).map((w) => w.replace(/\s+/g, ' ')));
   }
@@ -67,14 +67,50 @@
     return false;
   }
 
+  // 曲名・アーティスト名は、届いた名前と別の言語の名前(alt。例: 日本のストアのカタカナ名に対する英語名)の、合うほうで比べる
+  function titleScore(c, desc) {
+    let t = similarity(c.title, desc.title);
+    if (desc.alt && desc.alt.title) t = Math.max(t, similarity(c.title, desc.alt.title));
+    return t;
+  }
+  function artistNames(desc) {
+    return [desc.artist, desc.alt && desc.alt.artist].filter(Boolean);
+  }
+  function artistScore(c, desc) {
+    const names = artistNames(desc);
+    if (!names.length) return 0.5;
+    let top = 0;
+    for (const n of names) {
+      const cn = compact(n);
+      top = Math.max(top, similarity(c.artist, n), compact(c.artist).includes(cn.slice(0, 6)) ? 0.8 : 0);
+      // YouTube では投稿したチャンネル名がアーティストとは限らないので、「アーティスト - 曲名」の形の題名も見る
+      if (cn.length >= 3 && compact(c.title).includes(cn)) top = Math.max(top, 0.7);
+    }
+    return top;
+  }
+  // 文字の種類(カタカナ・漢字 / ローマ字)が同じで、比べられるか
+  function script(s) {
+    const t = String(s || '');
+    if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(t)) return 'cjk';
+    return /[a-z]/i.test(t) ? 'latin' : 'other';
+  }
+  function comparable(c, desc) {
+    return artistNames(desc).some((n) => script(n) === script(c.artist));
+  }
+  // アーティスト名が比べられるのに合わない = 別の人の曲(カバー・同じ題名の別の曲など)
+  function otherArtist(c, desc) {
+    return artistNames(desc).length > 0 && artistScore(c, desc) < 0.5 && comparable(c, desc);
+  }
+
   function best(candidates, desc) {
     let top = null;
     for (const c of candidates || []) {
-      const t = similarity(c.title, desc.title);
-      const a = desc.artist ? Math.max(similarity(c.artist, desc.artist), compact(c.artist).includes(compact(desc.artist).slice(0, 6)) ? 0.8 : 0) : 0.5;
+      if (otherArtist(c, desc)) continue;
+      const t = titleScore(c, desc);
+      const a = artistScore(c, desc);
       const d = durationScore(Number(c.duration) || 0, Number(desc.duration) || 0);
       // 括弧の中まで含めて曲名がぴったり同じなら少し加点(「(Remaster)」「(Live)」などの別バージョンより優先)
-      const exact = raw(c.title) === raw(desc.title) ? 0.08 : 0;
+      const exact = raw(c.title) === raw(desc.title) || (desc.alt && raw(c.title) === raw(desc.alt.title)) ? 0.08 : 0;
       const score = 0.55 * t + 0.3 * a + 0.15 * d + exact + (c.preferred ? 0.05 : 0) - (otherVersion(c.title, desc.title) ? 0.3 : 0);
       if (t < 0.6 || score < 0.6) continue;
       if (!top || score > top.score) top = { id: c.id, score, candidate: c };
@@ -88,8 +124,8 @@
     const want = Number(desc.duration) || 0;
     const ok = [];
     for (const c of candidates || []) {
-      const t = similarity(c.title, desc.title);
-      const a = desc.artist ? Math.max(similarity(c.artist, desc.artist), compact(c.artist).includes(compact(desc.artist).slice(0, 6)) ? 0.8 : 0) : 0.5;
+      const t = titleScore(c, desc);
+      const a = artistScore(c, desc);
       if (t < 0.6 || a < 0.5) continue;
       const diff = want && c.duration ? Math.abs(Number(c.duration) - want) : 999;
       ok.push({
@@ -97,11 +133,12 @@
         diff,
         other: otherVersion(c.title, desc.title) ? 1 : 0, // ライブ版・アコースティック版など
         pref: c.preferred ? 1 : 0, // 公式の音源(YouTube の「〜 - Topic」、YouTube Music の「曲」)
-        score: 0.6 * t + 0.4 * a + (raw(c.title) === raw(desc.title) ? 0.08 : 0),
+        score: 0.6 * t + 0.4 * a + (raw(c.title) === raw(desc.title) || (desc.alt && raw(c.title) === raw(desc.alt.title)) ? 0.08 : 0),
         candidate: c,
       });
     }
-    if (!ok.length) return best(candidates, desc); // アーティスト名が合わない時(チャンネル名が違う等)は、ふつうの選び方
+    // アーティスト名が比べられない時(カタカナとローマ字など)だけ、ふつうの選び方。比べられて合わない人の曲は選ばない
+    if (!ok.length) return best(candidates, desc);
     // 1. 別バージョンは後回し  2. 長さが3秒以上違えば近いほう  3. 公式の音源  4. 長さが近いほう  5. 曲名がよく合うほう
     ok.sort(
       (x, y) =>

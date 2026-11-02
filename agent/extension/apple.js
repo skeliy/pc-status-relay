@@ -15,6 +15,8 @@
   const M = () => window.__pcsMatch;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const isrcCache = new Map(); // カタログ番号 -> ISRC(調べ中は null)
+  const enCache = new Map(); // カタログ番号 -> { title, artist } 英語の曲名とアーティスト名(日本のストアでは名前がカタカナになるため、相手が探しやすいように一緒に送る)
+  const lookupStarted = new Map(); // カタログ番号 -> 調べ始めた時刻
   const availCache = new Map(); // カタログ番号 -> この国のストアで流せるか(true/false)
   const libCache = new Map(); // ライブラリの番号 i.xxx -> カタログの番号(調べ中は null、無ければ '')
 
@@ -64,26 +66,33 @@
     return { id, kind, isrc: attrs.isrc || null, libId };
   }
 
+  function remember(song) {
+    if (!song || !song.attributes) return;
+    const a = song.attributes;
+    if (a.isrc) isrcCache.set(String(song.id), a.isrc);
+    enCache.set(String(song.id), { title: a.name || null, artist: a.artistName || null });
+  }
+
+  // ISRC と、英語の曲名・アーティスト名を調べる
   function lookupIsrc(id) {
     if (isrcCache.has(id)) return;
     isrcCache.set(id, null);
+    lookupStarted.set(id, Date.now());
     const m = music();
-    api(`/v1/catalog/${storefront(m)}/songs/${id}`)
-      .then((d) => {
-        const song = d && d.data && d.data[0];
-        if (song && song.attributes && song.attributes.isrc) isrcCache.set(id, song.attributes.isrc);
-      })
-      .catch(() => {});
+    api(`/v1/catalog/${storefront(m)}/songs/${id}`, { l: 'en-US' })
+      .then((d) => remember(d && d.data && d.data[0]))
+      .catch(() => {})
+      .finally(() => { if (!enCache.has(id)) enCache.set(id, null); });
   }
 
   function lookupLibrary(libId) {
     if (libCache.has(libId)) return;
     libCache.set(libId, null);
-    api(`/v1/me/library/songs/${libId}/catalog`)
+    api(`/v1/me/library/songs/${libId}/catalog`, { l: 'en-US' })
       .then((d) => {
         const song = d && d.data && d.data[0];
         libCache.set(libId, song && /^\d+$/.test(String(song.id)) ? String(song.id) : '');
-        if (song && song.attributes && song.attributes.isrc) isrcCache.set(String(song.id), song.attributes.isrc);
+        if (song && /^\d+$/.test(String(song.id))) remember(song);
       })
       .catch(() => libCache.set(libId, ''));
   }
@@ -123,7 +132,14 @@
         localOnly = true;
       }
     }
-    if (info.id && !localOnly && !info.isrc) lookupIsrc(info.id);
+    if (info.id && !localOnly) {
+      lookupIsrc(info.id);
+      // 英語の名前と ISRC が届くまで(ふつう1秒以内)は、曲として知らせない(相手が正しい曲を探せるように)
+      if (!enCache.has(info.id) && Date.now() - (lookupStarted.get(info.id) || 0) < 2500) {
+        return { available: true, service: SERVICE, song: null, isPlaying: false, phase: 'loading' };
+      }
+    }
+    const en = info.id && !localOnly ? enCache.get(info.id) : null;
     return {
       available: true,
       service: SERVICE,
@@ -139,6 +155,7 @@
             album: item.albumName || attrs.albumName || null,
             duration: m.currentPlaybackDuration || (attrs.durationInMillis ? attrs.durationInMillis / 1000 : 0),
             isrc: info.isrc || (localOnly ? null : isrcCache.get(info.id)) || null,
+            alt: en && (en.title || en.artist) ? en : null, // 英語の曲名・アーティスト名
           }
         : null,
       isPlaying: !!m.isPlaying,

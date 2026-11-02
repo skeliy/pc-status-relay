@@ -69,10 +69,25 @@
   }
 
   // 「曲」だけに絞った検索(ページの検索と同じ仕組み)
+  // 届いた名前と、英語の名前(alt)の両方で探して混ぜる
   async function search(desc) {
+    const queries = [];
+    if (desc.alt && (desc.alt.title || desc.alt.artist)) queries.push([desc.alt.title || desc.title, desc.alt.artist || desc.artist].filter(Boolean).join(' '));
+    queries.push([desc.title, desc.artist].filter(Boolean).join(' '));
+    const lists = await Promise.all([...new Set(queries)].map((q) => searchOnce(q).catch(() => [])));
+    const seen = new Set();
+    const out = [];
+    for (const c of [].concat(...lists)) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push(c);
+    }
+    return out;
+  }
+
+  async function searchOnce(query) {
     const cfg = window.ytcfg;
     if (!cfg || !cfg.get) throw new Error('ytcfg が見つかりません');
-    const query = [desc.title, desc.artist].filter(Boolean).join(' ');
     const resp = await fetch('/youtubei/v1/search?prettyPrint=false&key=' + encodeURIComponent(cfg.get('INNERTUBE_API_KEY')), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

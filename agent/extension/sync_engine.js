@@ -200,6 +200,7 @@
         album: song.album || null,
         duration: Number(song.duration) || (sameAsShared ? this.shared.desc.duration : null) || null,
         isrc: song.isrc || (sameAsShared ? this.shared.desc.isrc : null) || null,
+        alt: song.alt || (sameAsShared ? this.shared.desc.alt : null) || null, // 別の言語の曲名・アーティスト名(探す時に使う)
         // localOnly: 自分のライブラリでしか通じない番号(相手には送らず、曲名などで探してもらう)
         ids: song.localOnly ? Object.assign({}, baseIds) : Object.assign({}, baseIds, { [st.service]: song.id }),
       };
