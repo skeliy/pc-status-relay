@@ -96,7 +96,9 @@
         const id = (it.playlistItemData || {}).videoId || (JSON.stringify(it).match(/"videoId":"([\w-]{11})"/) || [])[1];
         const parts = (cols[1] || '').split('•').map((s) => s.trim());
         if (parts.length && /^(song|曲|video|動画)$/i.test(parts[0])) parts.shift();
-        return { id, title: cols[0], artist: parts[0] || '', duration: M().parseClock(parts[parts.length - 1]) };
+        const type = (JSON.stringify(it).match(/"musicVideoType":"(\w+)"/) || [])[1] || '';
+        // MUSIC_VIDEO_TYPE_ATV = YouTube Music の「曲」(公式の音源)。ミュージックビデオ(OMV)より優先する
+        return { id, title: cols[0], artist: parts[0] || '', duration: M().parseClock(parts[parts.length - 1]), preferred: type === 'MUSIC_VIDEO_TYPE_ATV' };
       })
       .filter((c) => c.id);
   }

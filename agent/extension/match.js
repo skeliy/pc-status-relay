@@ -54,6 +54,19 @@
   }
 
   // candidates: [{ id, title, artist, duration }] / desc: { title, artist, duration }
+  // 別バージョンを表す言葉(元の曲名に無いのに候補の曲名にあれば、別バージョンとみなす)
+  const VERSION_WORDS = /\b(live|acoustic|remix(?:ed)?|cover|karaoke|instrumental|inst|sped\s*up|speed\s*up|slowed|reverb|nightcore|8d|demo|unplugged|orchestral|piano\s*ver(?:sion)?|lofi|lo-fi)\b|ライブ|弾いてみた|歌ってみた|カバー|リミックス|アコースティック|カラオケ|オルゴール/gi;
+  function versionWords(s) {
+    return new Set((String(s || '').normalize('NFKC').toLowerCase().match(VERSION_WORDS) || []).map((w) => w.replace(/\s+/g, ' ')));
+  }
+  function otherVersion(candTitle, wantTitle) {
+    const want = versionWords(wantTitle);
+    const cand = versionWords(candTitle);
+    for (const w of cand) if (!want.has(w)) return true; // 例: 元はスタジオ版なのに候補はライブ版
+    for (const w of want) if (!cand.has(w)) return true; // 例: 元はライブ版なのに候補はスタジオ版
+    return false;
+  }
+
   function best(candidates, desc) {
     let top = null;
     for (const c of candidates || []) {
@@ -62,7 +75,7 @@
       const d = durationScore(Number(c.duration) || 0, Number(desc.duration) || 0);
       // 括弧の中まで含めて曲名がぴったり同じなら少し加点(「(Remaster)」「(Live)」などの別バージョンより優先)
       const exact = raw(c.title) === raw(desc.title) ? 0.08 : 0;
-      const score = 0.55 * t + 0.3 * a + 0.15 * d + exact;
+      const score = 0.55 * t + 0.3 * a + 0.15 * d + exact + (c.preferred ? 0.05 : 0) - (otherVersion(c.title, desc.title) ? 0.3 : 0);
       if (t < 0.6 || score < 0.6) continue;
       if (!top || score > top.score) top = { id: c.id, score, candidate: c };
     }
@@ -79,10 +92,24 @@
       const a = desc.artist ? Math.max(similarity(c.artist, desc.artist), compact(c.artist).includes(compact(desc.artist).slice(0, 6)) ? 0.8 : 0) : 0.5;
       if (t < 0.6 || a < 0.5) continue;
       const diff = want && c.duration ? Math.abs(Number(c.duration) - want) : 999;
-      ok.push({ id: c.id, diff, score: 0.6 * t + 0.4 * a + (raw(c.title) === raw(desc.title) ? 0.08 : 0), candidate: c });
+      ok.push({
+        id: c.id,
+        diff,
+        other: otherVersion(c.title, desc.title) ? 1 : 0, // ライブ版・アコースティック版など
+        pref: c.preferred ? 1 : 0, // 公式の音源(YouTube の「〜 - Topic」、YouTube Music の「曲」)
+        score: 0.6 * t + 0.4 * a + (raw(c.title) === raw(desc.title) ? 0.08 : 0),
+        candidate: c,
+      });
     }
     if (!ok.length) return best(candidates, desc); // アーティスト名が合わない時(チャンネル名が違う等)は、ふつうの選び方
-    ok.sort((x, y) => (Math.abs(x.diff - y.diff) > 1.5 ? x.diff - y.diff : y.score - x.score));
+    // 1. 別バージョンは後回し  2. 長さが3秒以上違えば近いほう  3. 公式の音源  4. 長さが近いほう  5. 曲名がよく合うほう
+    ok.sort(
+      (x, y) =>
+        x.other - y.other ||
+        (Math.abs(x.diff - y.diff) > 3 ? x.diff - y.diff : 0) ||
+        y.pref - x.pref ||
+        (Math.abs(x.diff - y.diff) > 1.5 ? x.diff - y.diff : y.score - x.score)
+    );
     return ok[0];
   }
 

@@ -120,11 +120,24 @@
     }).filter((q) => q.title);
   }
 
-  // ページ自身の検索と同じ仕組みで動画を探し、近い順に並べる
+  // ページ自身の検索と同じ仕組みで動画を探す。
+  // 公式の音源(「アーティスト - Topic」の動画)はふつうの検索では出てこないことが多いので、「topic」を付けた検索もして混ぜる
   async function search(desc) {
+    const query = [desc.title, desc.artist].filter(Boolean).join(' ');
+    const [plain, topic] = await Promise.all([searchOnce(query), searchOnce(query + ' topic').catch(() => [])]);
+    const seen = new Set();
+    const out = [];
+    for (const c of plain.concat(topic.filter((x) => x.preferred))) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push(c);
+    }
+    return out;
+  }
+
+  async function searchOnce(query) {
     const cfg = window.ytcfg;
     if (!cfg || !cfg.get) throw new Error('ytcfg が見つかりません');
-    const query = [desc.title, desc.artist].filter(Boolean).join(' ');
     const resp = await fetch('/youtubei/v1/search?prettyPrint=false&key=' + encodeURIComponent(cfg.get('INNERTUBE_API_KEY')), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -140,12 +153,16 @@
       }
       for (const k in o) walk(o[k]);
     })(json);
-    return vids.map((v) => ({
-      id: v.videoId,
-      title: ((v.title || {}).runs || []).map((r) => r.text).join(''),
-      artist: ((v.ownerText || {}).runs || []).map((r) => r.text).join(''),
-      duration: M().parseClock((v.lengthText || {}).simpleText),
-    }));
+    return vids.map((v) => {
+      const artist = ((v.ownerText || {}).runs || []).map((r) => r.text).join('');
+      return {
+        id: v.videoId,
+        title: ((v.title || {}).runs || []).map((r) => r.text).join(''),
+        artist,
+        duration: M().parseClock((v.lengthText || {}).simpleText),
+        preferred: / - Topic\b/i.test(artist), // YouTube が自動で作る公式の音源
+      };
+    });
   }
 
   async function candidates(desc) {
