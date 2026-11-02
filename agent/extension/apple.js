@@ -1,0 +1,244 @@
+// Apple Music(music.apple.com)のページの中で動く部品。
+// ページが使っている MusicKit(Apple の再生プレイヤー)で、今の曲を読み取ったり、指定の曲を流したりする。
+// 曲の検索も MusicKit の仕組みで行う(ISRC が分かればそれで、分からなければ曲名とアーティストで)。
+(function () {
+  const SERVICE = 'apple';
+  const SRC_PAGE = 'pcs-page';
+  const SRC_EXT = 'pcs-ext-cmd';
+
+  if (window.__pcsAdapter) {
+    try {
+      window.__pcsAdapter.stop();
+    } catch (e) {}
+  }
+
+  const M = () => window.__pcsMatch;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const isrcCache = new Map(); // カタログ番号 -> ISRC(調べ中は null)
+
+  function music() {
+    try {
+      return window.MusicKit && window.MusicKit.getInstance ? window.MusicKit.getInstance() : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function storefront(m) {
+    return m.storefrontId || m.storefrontCountryCode || 'us';
+  }
+
+  async function api(path, params) {
+    const m = music();
+    const res = await m.api.music(path, params || {});
+    return res && res.data !== undefined ? res.data : res;
+  }
+
+  // 相手のPCでも同じ曲を開けるよう、「カタログの番号」を取り出す(ライブラリの番号 i.xxx は本人にしか通じない)
+  function catalogInfo(item) {
+    const attrs = item.attributes || {};
+    const pp = item.playParams || attrs.playParams || {};
+    let kind = pp.kind || null;
+    if (!kind) {
+      if (/songs$/.test(item.type || '')) kind = 'song';
+      else if (/music-videos$/.test(item.type || '')) kind = 'musicVideo';
+    }
+    const candidates = [pp.catalogId, item.songId, pp.isLibrary ? null : pp.id, pp.isLibrary ? null : item.id];
+    let id = null;
+    for (const c of candidates) {
+      if (c && /^\d+$/.test(String(c))) {
+        id = String(c);
+        break;
+      }
+    }
+    if (kind !== 'song' && kind !== 'musicVideo') id = null;
+    return { id, kind, isrc: attrs.isrc || null };
+  }
+
+  function lookupIsrc(id) {
+    if (isrcCache.has(id)) return;
+    isrcCache.set(id, null);
+    const m = music();
+    api(`/v1/catalog/${storefront(m)}/songs/${id}`)
+      .then((d) => {
+        const song = d && d.data && d.data[0];
+        if (song && song.attributes && song.attributes.isrc) isrcCache.set(id, song.attributes.isrc);
+      })
+      .catch(() => {});
+  }
+
+  function readState() {
+    const m = music();
+    if (!m) return { available: false, service: SERVICE };
+    const ps = m.playbackState;
+    const phase = { 2: 'playing', 3: 'paused', 1: 'loading', 6: 'loading', 8: 'loading', 9: 'loading', 5: 'ended', 10: 'ended', 0: 'idle', 4: 'idle' }[ps] || 'idle';
+    const item = m.nowPlayingItem;
+    if (!item) return { available: true, service: SERVICE, song: null, isPlaying: false, phase };
+    const attrs = item.attributes || {};
+    const info = catalogInfo(item);
+    if (info.id && !info.isrc) lookupIsrc(info.id);
+    return {
+      available: true,
+      service: SERVICE,
+      quietResolve: true,
+      queue: readQueue(m),
+      song: info.id
+        ? {
+            id: info.id,
+            kind: info.kind,
+            title: item.title || attrs.name || null,
+            artist: item.artistName || attrs.artistName || null,
+            album: item.albumName || attrs.albumName || null,
+            duration: m.currentPlaybackDuration || (attrs.durationInMillis ? attrs.durationInMillis / 1000 : 0),
+            isrc: info.isrc || isrcCache.get(info.id) || null,
+          }
+        : null,
+      isPlaying: !!m.isPlaying,
+      phase,
+      position: m.currentPlaybackTime || 0,
+    };
+  }
+
+  // MusicKit のキューから、今の曲より後ろの曲を読む
+  function readQueue(m) {
+    try {
+      const q = m.queue;
+      const items = (q && q.items) || [];
+      const pos = typeof q.position === 'number' ? q.position : -1;
+      return items.slice(pos + 1, pos + 6).map((it) => {
+        const a = it.attributes || {};
+        const info = catalogInfo(it);
+        return {
+          ids: info.id ? { apple: info.id } : {},
+          title: it.title || a.name || null,
+          artist: it.artistName || a.artistName || null,
+          duration: a.durationInMillis ? a.durationInMillis / 1000 : it.playbackDuration ? it.playbackDuration / 1000 : 0,
+          isrc: info.isrc || (info.id && isrcCache.get(info.id)) || null,
+        };
+      }).filter((x) => x.title);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function toCandidate(s) {
+    const a = s.attributes || {};
+    return { id: s.id, title: a.name, artist: a.artistName, duration: a.durationInMillis ? a.durationInMillis / 1000 : 0 };
+  }
+
+  async function resolve(desc) {
+    if (desc.ids && desc.ids.apple) return desc.ids.apple;
+    const m = music();
+    const sf = storefront(m);
+    if (desc.isrc) {
+      try {
+        const d = await api(`/v1/catalog/${sf}/songs`, { 'filter[isrc]': desc.isrc });
+        const list = (d && d.data) || [];
+        if (list.length) {
+          const hit = M().best(list.map(toCandidate), desc);
+          return (hit && hit.id) || list[0].id;
+        }
+      } catch (e) {}
+    }
+    const term = [desc.title, desc.artist].filter(Boolean).join(' ');
+    if (!term) return null;
+    // 日本のストアではアーティスト名が日本語で返ってくるので、英語の名前でも検索して候補を合わせる
+    const list = [];
+    for (const l of [undefined, 'en-US']) {
+      try {
+        const params = { term, types: 'songs', limit: 10 };
+        if (l) params.l = l;
+        const d = await api(`/v1/catalog/${sf}/search`, params);
+        for (const s of (d && d.results && d.results.songs && d.results.songs.data) || []) {
+          list.push(toCandidate(s)); // 同じ曲が日本語名・英語名の両方で入るが、どちらかが合えばよい
+        }
+      } catch (e) {}
+    }
+    const hit = M().best(list, desc);
+    return hit ? hit.id : null;
+  }
+
+  function adjusted(cmd) {
+    const elapsed = cmd.play ? Math.max(0, (Date.now() - cmd.issuedAt) / 1000) : 0;
+    return Math.max(0, (cmd.position || 0) + elapsed);
+  }
+
+  async function run(cmd) {
+    const m = music();
+    if (!m) return { ok: false, error: 'MusicKit が見つかりません' };
+    if (cmd.action === 'load') {
+      const before = readState();
+      const id = cmd.songId || (await resolve(cmd.desc || {}));
+      if (!id) return { ok: false, error: 'notfound', localId: before.song ? before.song.id : null };
+      const kind = cmd.desc && cmd.desc.kind === 'musicVideo' ? 'musicVideo' : 'song';
+      await m.setQueue({ [kind]: id });
+      if (cmd.play) {
+        await m.play();
+        // 再生が始まってから位置を合わせる(始まる前のシークは無視されることがあるため)
+        for (let i = 0; i < 20 && !m.isPlaying; i++) await sleep(100);
+      }
+      const pos = adjusted(cmd);
+      if (pos > 1) await m.seekToTime(pos);
+      return { ok: true, resolvedId: id };
+    }
+    if (cmd.action === 'resolve') {
+      const id = await resolve(cmd.desc || {});
+      return id ? { ok: true, resolvedId: id } : { ok: false, error: 'notfound' };
+    }
+    if (cmd.action === 'seek') await m.seekToTime(adjusted(cmd));
+    else if (cmd.action === 'play') await m.play();
+    else if (cmd.action === 'pause') await m.pause();
+    return { ok: true };
+  }
+
+  function post(kind, payload) {
+    window.postMessage(Object.assign({ source: SRC_PAGE, kind }, payload), '*');
+  }
+
+  function onMessage(e) {
+    if (e.source !== window || !e.data || e.data.source !== SRC_EXT) return;
+    const cmd = e.data.cmd;
+    run(cmd)
+      .catch((err) => {
+        // ブラウザが「ユーザーが操作していないのに音を出すな」と止めた場合
+        const autoplay = err && (err.name === 'NotAllowedError' || /user (gesture|interaction)|not allowed/i.test(String(err.message || err)));
+        return { ok: false, error: autoplay ? 'autoplay' : String((err && err.message) || err) };
+      })
+      .then((res) => post('result', { result: Object.assign({ id: cmd.id }, res) }))
+      .finally(() => post('state', { state: readState() }));
+  }
+
+  // MusicKit の出来事(曲が変わった・再生/停止した)はすぐ知らせる。0.4秒ごとの定期送信もする
+  let hooked = null;
+  const EVENTS = ['playbackStateDidChange', 'nowPlayingItemDidChange'];
+  const onEvent = () => post('state', { state: readState() });
+  function hook() {
+    const m = music();
+    if (!m || hooked === m) return;
+    try {
+      for (const n of EVENTS) m.addEventListener(n, onEvent);
+      hooked = m;
+    } catch (e) {}
+  }
+
+  window.addEventListener('message', onMessage);
+  const timer = setInterval(() => {
+    hook();
+    post('state', { state: readState() });
+  }, 400);
+
+  window.__pcsAdapter = {
+    service: SERVICE,
+    readState,
+    resolve,
+    stop() {
+      clearInterval(timer);
+      window.removeEventListener('message', onMessage);
+      if (hooked) {
+        try {
+          for (const n of EVENTS) hooked.removeEventListener(n, onEvent);
+        } catch (e) {}
+      }
+    },
+  };
+})();

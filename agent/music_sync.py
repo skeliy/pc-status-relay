@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Apple Music(ブラウザ版)の曲を、友達のPCと同時に再生する「曲の共有」機能。
+「一緒に聴く」機能のエージェント側。Apple Music・Spotify・YouTube Music・YouTube のブラウザ版で、
+サービスが違っても同じ曲を同時に流す。
 
-全体の流れ:
-  1. どちらかが ショートカットキー(初期値 Ctrl+Alt+M)/トレイアイコン/Apple Music の画面の
-     ボタン で「共有をリクエスト」する
-  2. 相手のPCの右下に、作業の邪魔にならない小さなポップアップが出る(フォーカスは奪わない)
-  3. 相手が「許可」を押すと共有が始まり、どちらかが「終了」するまで続く
-  4. 共有中は、どちらかが曲を選ぶ・再生・一時停止・シークすると、もう片方も同じ状態になる
-
-役割分担:
-  - ブラウザ拡張機能(extension/)… Apple Music のページで、今の曲・再生状態を0.5秒ごとに
-    このエージェントへ知らせ、エージェントから来た指示(この曲を再生して、など)を実行するだけ
-  - このファイル … 共有の状態管理、相手とのやり取り(中継サーバー経由)、同期の判断
-  - popup.py … ポップアップとショートカットキー(Windows専用)
+仕組み:
+  - 中継サーバーに、このPCの「部屋」を開いておく(config の listen_room。中にいる人は全員が曲を変えられる)
+  - 実際の同期(今の曲を読む・同じ曲を探して流す)は、ブラウザ拡張機能(extension/)が部屋の中で行う。
+    このファイルは、拡張機能に「どの部屋に入るか(部屋の鍵)」を教える係
+  - ショートカットキー(初期値 Ctrl+Alt+M)で友達にリクエストを送り、相手が許可すると、
+    相手はこちらの部屋に入る
+  - config の listen_password を設定すると、Discord のリンク(/listen/<部屋>)から来た人も
+    パスワードで部屋に入れる
+  - 誰かが入ってきた・出ていったら、画面右下のポップアップと通知音で知らせる
 
 拡張機能とは http://127.0.0.1:8788 で話す(このPCの中だけ。外からは繋がらない)。
 """
@@ -21,6 +19,7 @@ Apple Music(ブラウザ版)の曲を、友達のPCと同時に再生する「�
 import json
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -37,21 +36,22 @@ EXTENSION_DIR = os.path.join(SCRIPT_DIR, "extension")
 EXTENSION_MANIFEST = os.path.join(EXTENSION_DIR, "manifest.json")
 
 MUSIC_PORT = 8788  # 拡張機能側にも同じ番号が書いてあるので、変えるなら両方変えること
-APPLE_MUSIC_URL = "https://music.apple.com/"
+SERVICE_URLS = {
+    "apple": "https://music.apple.com/",
+    "spotify": "https://open.spotify.com/",
+    "ytm": "https://music.youtube.com/",
+    "youtube": "https://www.youtube.com/",
+}
+SERVICE_NAMES = {"apple": "Apple Music", "spotify": "Spotify", "ytm": "YouTube Music", "youtube": "YouTube", "none": "?"}
 
 REQUEST_TIMEOUT_SEC = 60  # リクエストに応答が無ければ諦めるまでの秒数
-TAB_ALIVE_SEC = 3.0  # この秒数ティックが来ないタブは閉じられたとみなす
-LATENCY_COMP_SEC = 0.3  # 相手に届くまでの通信時間の見積もり(再生位置をこの分だけ先に進める)
-
-# MusicKit の playbackState の番号
-PS_NONE, PS_LOADING, PS_PLAYING, PS_PAUSED, PS_STOPPED, PS_ENDED = 0, 1, 2, 3, 4, 5
-PS_SEEKING, PS_WAITING, PS_STALLED, PS_COMPLETED = 6, 8, 9, 10
-TRANSIENT_STATES = {PS_NONE, PS_LOADING, PS_STOPPED, PS_ENDED, PS_SEEKING, PS_WAITING, PS_STALLED, PS_COMPLETED}
-SUPPORTED_KINDS = {"song", "musicVideo"}
+ROOM_HEARTBEAT_SEC = 30
+MEMBERS_CHECK_SEC = 4
+ROOM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 
 def _log(msg):
-    print(f"[曲の共有] {msg}", flush=True)
+    print(f"[一緒に聴く] {msg}", flush=True)
 
 
 def relay_base_url(server_url):
@@ -60,6 +60,12 @@ def relay_base_url(server_url):
     if url.endswith("/api/status"):
         url = url[: -len("/api/status")]
     return url
+
+
+def room_id_from_config(config):
+    raw = str(config.get("listen_room") or config.get("pc_id") or "room").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9-]+", "-", raw).strip("-")[:32] or "room"
+    return cleaned if ROOM_ID_RE.match(cleaned) else "room"
 
 
 def read_extension_version():
@@ -71,10 +77,10 @@ def read_extension_version():
 
 
 class ConsoleNotifier:
-    """ポップアップを出せない環境用(ログに出すだけ)。リクエストは Apple Music の画面からも許可できる。"""
+    """ポップアップを出せない環境用(ログに出すだけ)。リクエストは音楽サービスの画面からも許可できる。"""
 
     def ask(self, key, title, message, buttons, timeout_sec, on_timeout=None):
-        _log(f"{title}: {message}(Apple Music の画面の「許可」ボタンでも応答できます)")
+        _log(f"{title}: {message}(音楽サービスの画面の「許可」ボタンでも応答できます)")
 
     def close(self, key):
         pass
@@ -84,32 +90,33 @@ class ConsoleNotifier:
 
 
 class MusicSync:
-    def __init__(self, config, notifier=None, open_url=None, clock=None, wall_clock=None, start_threads=True):
+    def __init__(self, config, notifier=None, open_url=None, clock=None, start_threads=True):
         self.config = config
         self.pc_id = config["pc_id"]
         self.pc_label = config.get("pc_label") or self.pc_id
         self.base_url = relay_base_url(config.get("server_url"))
         self.headers = {"Authorization": f"Bearer {config.get('write_token', '')}"}
+        self.room_id = room_id_from_config(config)
+        self.password = str(config.get("listen_password") or "")
         self.hotkey_label = config.get("music_hotkey_label", "Ctrl+Alt+M")
         self.notifier = notifier or ConsoleNotifier()
         self.open_url = open_url or webbrowser.open
         self.clock = clock or time.monotonic
-        self.wall_clock = wall_clock or time.time
 
         self.lock = threading.RLock()
-        self.session = None  # {"id", "members": {pcId: label}}
+        self.own_token = None  # 自分の部屋の鍵(持ち主として)
+        self.own_you = None  # 自分の部屋での、自分の参加者番号
+        self.own_members = []
+        self.joined = None  # 友達の部屋に入っている時 {"id", "token", "owner", "session"}
+        self.joined_members = []
         self.pending_out = None  # {"id", "expires"}
-        self.pending_in = {}  # sessionId -> {"from", "label", "expires"}
-        self.shared = None  # 最後に「2人の共通の状態」になったもの
-        self.target = None  # 相手から来た状態に、こちらのプレイヤーを合わせている最中ならその目標
-        self.last_cmd = {}  # 指示の種類 -> 最後に出した時刻(同じ指示を連打しないため)
-        self.needs_click = False  # ブラウザが自動再生を止めた(画面を1回クリックしてもらう必要がある)
-        self.tabs = {}  # tabId -> {"at", "state", "last_playing"}
-        self.ever_tick = False  # 起動してから一度でも拡張機能から連絡があったか
-        self.waiting_ext_since = None  # 許可した後、拡張機能からの連絡を待ち始めた時刻
-        self.cmd_seq = 0
+        self.pending_in = {}  # sessionId -> {"from", "label", "room", "expires"}
+        self.last_ext_tick = 0.0
+        # 使っている音楽サービス(拡張機能が教えてくれる。config の music_service で最初から決めておける)
+        self.ext_service = config.get("music_service") if config.get("music_service") in SERVICE_URLS else None
+        self.waiting_ext_since = None
+        self.ever_tick = False
 
-        self.server_time_offset = 0.0
         self.send_queue = queue.Queue()
         self.http = requests.Session() if requests else None
         self._ext_version_cache = (None, None)
@@ -121,37 +128,53 @@ class MusicSync:
     def start(self):
         threading.Thread(target=self._send_worker, name="music-send", daemon=True).start()
         threading.Thread(target=self._poll_loop, name="music-poll", daemon=True).start()
+        threading.Thread(target=self._room_loop, name="music-room", daemon=True).start()
         threading.Thread(target=self._housekeeping_loop, name="music-house", daemon=True).start()
         threading.Thread(target=self._serve_extension, name="music-ext", daemon=True).start()
 
+    # ------------------------------------------------------------------ 状態
+    def _current_members_locked(self):
+        return self.joined_members if self.joined else self.own_members
+
+    def _other_members_locked(self):
+        members = self._current_members_locked()
+        mine = self.joined["you"] if self.joined else self.own_you
+        return [m for m in members if m.get("id") != mine]
+
+    def sharing(self):
+        with self.lock:
+            return bool(self.joined) or len(self._other_members_locked()) > 0
+
+    def is_busy(self):
+        """自動アップデートの再起動を後回しにすべきか。"""
+        with self.lock:
+            return self.sharing() or self.pending_out is not None
+
+    def status_text(self):
+        with self.lock:
+            if self.joined:
+                return f"{self.joined['owner']} の部屋から退出する"
+            others = self._other_members_locked()
+            if others:
+                return "一緒に聴くのを終了する(" + "、".join(m["label"] for m in others) + ")"
+            if self.pending_out:
+                return "一緒に聴くリクエストを取り消す"
+            return "友達に「一緒に聴く」をリクエストする"
+
     # ------------------------------------------------------------------ 操作(ショートカット・トレイ・画面のボタン)
     def toggle(self):
-        """ショートカットキー用: 状態に応じて「リクエスト」「取り消し」「終了」を切り替える。"""
         with self.lock:
-            if self.session:
+            if self.joined or self._other_members_locked():
                 action = "stop"
             elif self.pending_out:
                 action = "cancel"
             else:
                 action = "request"
-        if action == "stop":
-            self.stop()
-        elif action == "cancel":
-            self.cancel_request()
-        else:
-            self.request()
-
-    def status_text(self):
-        with self.lock:
-            if self.session:
-                return f"曲の共有を終了する({self._partner_names()}と共有中)"
-            if self.pending_out:
-                return "曲の共有リクエストを取り消す"
-            return "曲の共有をリクエストする"
+        getattr(self, {"stop": "stop", "cancel": "cancel_request", "request": "request"}[action])()
 
     def request(self):
         with self.lock:
-            if self.session or self.pending_out:
+            if self.pending_out:
                 return
             sid = uuid.uuid4().hex[:12]
             self.pending_out = {"id": sid, "expires": self.clock() + REQUEST_TIMEOUT_SEC}
@@ -159,19 +182,30 @@ class MusicSync:
         def on_result(result):
             delivered = (result or {}).get("delivered", 0)
             with self.lock:
-                still_pending = self.pending_out and self.pending_out["id"] == sid
-                if delivered == 0 and still_pending:
+                if delivered == 0 and self.pending_out and self.pending_out["id"] == sid:
                     self.pending_out = None
             if result is None:
                 self.notifier.toast("中継サーバーに繋がらなかったため、リクエストを送れませんでした")
             elif delivered == 0:
-                self.notifier.toast("共有できる相手が見つかりませんでした(相手のPCが新しいバージョンで動いていない可能性があります)")
+                self.notifier.toast("リクエストを送れる相手が見つかりませんでした(相手のPCが新しいバージョンで動いていない可能性があります)")
             else:
                 names = "、".join(r.get("label") or r.get("id") for r in result.get("recipients", []))
-                self.notifier.toast(f"{names} に曲の共有をリクエストしました。許可を待っています…")
+                self.notifier.toast(f"{names} に「一緒に聴く」をリクエストしました。許可を待っています…")
 
-        _log(f"リクエストを送信 (session={sid})")
-        self._send("*", "request", sid, {"timeoutSec": REQUEST_TIMEOUT_SEC}, on_result=on_result)
+        _log(f"リクエストを送信 (session={sid}, 部屋={self.room_id})")
+        self._send("*", "request", sid, {"timeoutSec": REQUEST_TIMEOUT_SEC, "room": self.room_id}, on_result=on_result)
+        # 前に部屋に入ったことがある「拡張機能だけの人」にも招待を送る(拡張機能に通知と音が届く)
+        threading.Thread(target=self._invite_known_clients, daemon=True).start()
+
+    def _invite_known_clients(self):
+        with self.lock:
+            token = self.own_token
+        if not token:
+            return
+        r = self._room_post("invite", {"room": self.room_id, "token": token, "target": "clients"})
+        names = "、".join(x.get("label", "") for x in (r or {}).get("invited", []) if x.get("label"))
+        if names:
+            self.notifier.toast(f"前に参加した {names} にも招待を送りました")
 
     def cancel_request(self):
         with self.lock:
@@ -180,39 +214,63 @@ class MusicSync:
             sid = self.pending_out["id"]
             self.pending_out = None
         self._send("*", "stop", sid, {"reason": "cancel"})
-        self.notifier.toast("曲の共有リクエストを取り消しました")
+        self.notifier.toast("リクエストを取り消しました")
 
     def stop(self, notify=True):
+        """友達の部屋にいれば退出、自分の部屋に人がいれば全員に終了してもらう。"""
         with self.lock:
-            if not self.session:
-                return
-            sid = self.session["id"]
-            self._end_session_locked()
-        self._send("*", "stop", sid, {"reason": "stop"})
-        if notify:
-            self.notifier.toast("曲の共有を終了しました")
+            joined = self.joined
+            own_token = self.own_token
+            has_others = bool(self._other_members_locked())
+            self.joined = None
+            self.joined_members = []
+        if joined:
+            self._room_post("leave", {"room": joined["id"], "token": joined["token"]})
+            if notify:
+                self.notifier.toast(f"{joined['owner']} の部屋から退出しました")
+            return
+        if has_others and own_token:
+            self._room_post("end", {"room": self.room_id, "token": own_token})
+            with self.lock:
+                self.own_members = [m for m in self.own_members if m.get("kind") == "owner"]
+            if notify:
+                self.notifier.toast("一緒に聴くのを終了しました(全員が部屋から出ました)")
 
     def accept(self, sid):
         with self.lock:
             info = self.pending_in.pop(sid, None)
-            if not info:
-                return
-            if self.session:
-                self._end_session_locked()
+        if not info:
+            return
+        self.notifier.close(sid)
+        room = info.get("room")
+        if not room:
+            self.notifier.toast(f"{info['label']} のPCのプログラムが古いため、参加できませんでした")
+            return
+        result = self._room_post(
+            "member-token", {"room": room, "pc": self.pc_id, "label": self.pc_label, "service": self.ext_service}, auth=True
+        )
+        if not result or not result.get("token"):
+            self.notifier.toast(f"{info['label']} の部屋に入れませんでした(部屋が閉じている可能性があります)")
+            return
+        old = None
+        with self.lock:
+            old = self.joined
+            self.joined = {"id": room, "token": result["token"], "you": result.get("you"), "owner": info["label"], "session": sid}
+            self.joined_members = []
             self.pending_out = None
-            self.session = {"id": sid, "members": {info["from"]: info["label"]}}
-            self.shared = None
-            self.target = None
-            tab_alive = self._primary_tab_locked() is not None
+            tab_alive = self.clock() - self.last_ext_tick < 5
             if not tab_alive:
                 self.waiting_ext_since = self.clock()
-        self.notifier.close(sid)
+        if old and old["id"] != room:
+            self._room_post("leave", {"room": old["id"], "token": old["token"]})
         self._send(info["from"], "accept", sid, {})
-        self.notifier.toast(f"{info['label']} と曲の共有を始めました")
-        _log(f"許可しました (session={sid}, 相手={info['label']})")
+        self.notifier.toast(f"{info['label']} の部屋に入りました。誰かが曲を選ぶと、同じ曲が流れます")
+        _log(f"許可しました (部屋={room}, 相手={info['label']})")
         if not tab_alive:
-            # Apple Music が開かれていなければ開く(拡張機能が入っていれば、開いたページで同期が始まる)
-            self.open_url(APPLE_MUSIC_URL)
+            if self.ext_service:
+                self.open_url(SERVICE_URLS[self.ext_service])  # 前に使っていた音楽サービスのページを開く
+            else:
+                self.notifier.toast("音楽サービス(Apple Music / Spotify / YouTube Music)のページをブラウザで開いてください", seconds=8)
 
     def decline(self, sid):
         with self.lock:
@@ -222,16 +280,9 @@ class MusicSync:
         self.notifier.close(sid)
         self._send(info["from"], "decline", sid, {})
 
-    # ------------------------------------------------------------------ 中継サーバーとのやり取り
+    # ------------------------------------------------------------------ 中継サーバー: リクエストのやり取り
     def _send(self, to, msg_type, sid, data, on_result=None):
-        body = {
-            "from": self.pc_id,
-            "fromLabel": self.pc_label,
-            "to": to,
-            "type": msg_type,
-            "sessionId": sid,
-            "data": data,
-        }
+        body = {"from": self.pc_id, "fromLabel": self.pc_label, "to": to, "type": msg_type, "sessionId": sid, "data": data}
         self.send_queue.put((body, on_result))
 
     def _send_worker(self):
@@ -247,7 +298,7 @@ class MusicSync:
                     _log(f"送信エラー: {r.status_code} {r.text[:120]}")
                     if r.status_code in (400, 401, 404):
                         break
-                except Exception as e:  # ネットワークエラー
+                except Exception as e:
                     _log(f"送信に失敗しました: {e}")
                 time.sleep(1 + attempt)
             if on_result:
@@ -268,7 +319,6 @@ class MusicSync:
                     timeout=40,
                 )
                 if r.status_code == 404:
-                    # 中継サーバーがまだ古い(曲の共有に対応していない)。しばらく待ってからまた試す
                     time.sleep(60)
                     continue
                 if r.status_code != 200:
@@ -278,14 +328,13 @@ class MusicSync:
                     continue
                 wait = 2
                 data = r.json()
-                seq = int(data.get("seq", 0))
                 server_now = float(data.get("serverNow", 0))
                 for m in data.get("messages", []):
                     try:
                         self.handle_message(m, server_now)
                     except Exception as e:
                         _log(f"メッセージの処理でエラー: {e}")
-                since = seq  # サーバーが再起動して番号が戻った場合も、ここで合わせ直される
+                since = int(data.get("seq", 0))
             except Exception as e:
                 _log(f"受信に失敗しました(再接続します): {e}")
                 time.sleep(min(wait, 60))
@@ -296,23 +345,19 @@ class MusicSync:
         sid = m.get("sessionId") or ""
         sender = m.get("from")
         label = m.get("fromLabel") or sender
+        data = m.get("data") or {}
         age = max(0.0, (server_now - float(m.get("at", server_now))) / 1000.0)
 
         if msg_type == "request":
             with self.lock:
-                busy = self.session is not None
-                if not busy:
-                    timeout = float((m.get("data") or {}).get("timeoutSec", REQUEST_TIMEOUT_SEC))
-                    self.pending_in[sid] = {"from": sender, "label": label, "expires": self.clock() + timeout - age}
-            if busy:
-                self._send(sender, "busy", sid, {})
-                return
-            _log(f"{label} からリクエストが来ました (session={sid})")
+                timeout = float(data.get("timeoutSec", REQUEST_TIMEOUT_SEC))
+                self.pending_in[sid] = {"from": sender, "label": label, "room": data.get("room"), "expires": self.clock() + timeout - age}
+            _log(f"{label} からリクエストが来ました (部屋={data.get('room')})")
             self.play_notify_sound()
             self.notifier.ask(
                 sid,
-                "曲の共有のリクエスト",
-                f"{label} が Apple Music の曲の共有をリクエストしています",
+                "一緒に聴くリクエスト",
+                f"{label} が「一緒に聴く」をリクエストしています",
                 [("許可", lambda: self.accept(sid), True), ("拒否", lambda: self.decline(sid), False)],
                 timeout_sec=REQUEST_TIMEOUT_SEC,
                 on_timeout=lambda: self._expire_incoming(sid),
@@ -321,29 +366,12 @@ class MusicSync:
 
         if msg_type == "accept":
             with self.lock:
-                if self.session and self.session["id"] == sid:
-                    self.session["members"][sender] = label
-                    started = False
-                elif self.pending_out and self.pending_out["id"] == sid:
+                mine = self.pending_out and self.pending_out["id"] == sid
+                if mine:
                     self.pending_out = None
-                    self.session = {"id": sid, "members": {sender: label}}
-                    self.shared = None
-                    self.target = None
-                    started = True
-                else:
-                    started = None
-                tab = self._primary_tab_locked()
-                current = tab["state"] if tab else None
-            if started is None:
-                # もう取り消したリクエストへの許可 → 相手に「終わったよ」と伝える
-                self._send(sender, "stop", sid, {"reason": "expired"})
-                return
-            self.notifier.toast(f"{label} が許可しました。曲の共有を始めます")
-            _log(f"{label} が許可しました (session={sid})")
-            # 今こちらで曲が流れていれば、すぐに相手にも流す
-            if current and current.get("songId") and current.get("isPlaying"):
-                with self.lock:
-                    self._broadcast_local_locked(current, self.clock())
+            if mine:
+                _log(f"{label} が許可しました")
+            # 参加したことは、部屋の参加者の確認(_room_loop)でも通知される
             return
 
         if msg_type in ("decline", "busy"):
@@ -352,34 +380,110 @@ class MusicSync:
                 if mine:
                     self.pending_out = None
             if mine:
-                if msg_type == "busy":
-                    self.notifier.toast(f"{label} は今ほかの人と曲を共有中です")
-                else:
-                    self.notifier.toast(f"{label} が曲の共有を断りました")
+                self.notifier.toast(f"{label} は今は参加できないようです" if msg_type == "busy" else f"{label} がリクエストを断りました")
             return
 
         if msg_type == "stop":
             with self.lock:
                 was_incoming = self.pending_in.pop(sid, None) is not None
-                in_session = self.session is not None and self.session["id"] == sid
-                if in_session:
-                    self._end_session_locked()
             if was_incoming:
                 self.notifier.close(sid)
-            if in_session:
-                self.notifier.toast(f"{label} が曲の共有を終了しました")
-                _log(f"{label} が終了しました (session={sid})")
             return
 
-        if msg_type == "state":
+    def _expire_incoming(self, sid):
+        with self.lock:
+            self.pending_in.pop(sid, None)
+
+    # ------------------------------------------------------------------ 中継サーバー: 部屋
+    def _room_post(self, action, body, auth=False):
+        try:
+            r = self.http.post(
+                self.base_url + "/api/room/" + action, json=body, headers=self.headers if auth else {}, timeout=8
+            )
+            if r.status_code == 200:
+                return r.json()
+            return {"__status": r.status_code, "error": (r.json() if r.headers.get("content-type", "").startswith("application/json") else {}).get("error")}
+        except Exception as e:
+            _log(f"部屋の操作({action})に失敗しました: {e}")
+            return None
+
+    def open_room(self):
+        result = self._room_post(
+            "open",
+            {"room": self.room_id, "pc": self.pc_id, "label": self.pc_label, "password": self.password, "service": self.ext_service},
+            auth=True,
+        )
+        if result and result.get("token"):
             with self.lock:
-                if not self.session or self.session["id"] != sid:
-                    return
-                self._apply_remote_locked(m.get("data") or {}, age)
-            return
+                if self.own_token != result["token"]:
+                    _log(f"部屋「{self.room_id}」を開きました" + ("(パスワードで参加できます)" if self.password else ""))
+                self.own_token = result["token"]
+                self.own_you = result.get("you")
+                self._update_members_locked(own=True, members=result.get("members") or [])
+        elif result and result.get("__status") == 409:
+            _log(f"部屋「{self.room_id}」はほかのPCが使っています。config.json の listen_room を変えてください")
+        elif result and result.get("__status") == 404:
+            pass  # 中継サーバーがまだ古い
 
+    def _update_members_locked(self, own, members):
+        old = self.own_members if own else self.joined_members
+        mine = self.own_you if own else (self.joined or {}).get("you")
+        old_ids = {m["id"] for m in old}
+        new_ids = {m["id"] for m in members}
+        if own:
+            self.own_members = members
+        else:
+            self.joined_members = members
+        if not old:
+            return  # 最初の1回(部屋を開いた・入った直後)は、もともといた人のことは通知しない
+        for m in members:
+            if m["id"] not in old_ids and m["id"] != mine:
+                service = SERVICE_NAMES.get(m.get("service"))
+                where = f"({service})" if service and service != "?" else ""
+                threading.Thread(target=self.play_notify_sound, daemon=True).start()
+                self.notifier.toast(f"🎧 {m['label']}{where}が部屋に入りました")
+        for m in old:
+            if m["id"] not in new_ids and m["id"] != mine:
+                self.notifier.toast(f"{m['label']} が部屋から出ました")
+
+    def _room_loop(self):
+        last_open = 0.0
+        while True:
+            try:
+                now = self.clock()
+                if not self.own_token or now - last_open > ROOM_HEARTBEAT_SEC:
+                    self.open_room()
+                    last_open = now
+                with self.lock:
+                    joined = self.joined
+                    own_token = self.own_token
+                if joined:
+                    r = self._room_post("members", {"room": joined["id"], "token": joined["token"], "service": self.ext_service})
+                    if r and r.get("members") is not None:
+                        with self.lock:
+                            if self.joined is joined:
+                                self._update_members_locked(own=False, members=r["members"])
+                    elif r and r.get("__status") in (403, 404):
+                        with self.lock:
+                            if self.joined is joined:
+                                self.joined = None
+                                self.joined_members = []
+                        self.notifier.toast(f"{joined['owner']} の部屋が終了しました")
+                if own_token:
+                    r = self._room_post("members", {"room": self.room_id, "token": own_token, "service": self.ext_service})
+                    if r and r.get("members") is not None:
+                        with self.lock:
+                            self._update_members_locked(own=True, members=r["members"])
+                    elif r and r.get("__status") in (403, 404):
+                        with self.lock:
+                            self.own_token = None  # 中継サーバーが再起動した → 開き直す
+            except Exception as e:
+                _log(f"部屋の確認でエラー: {e}")
+            time.sleep(MEMBERS_CHECK_SEC)
+
+    # ------------------------------------------------------------------ 通知音
     def play_notify_sound(self):
-        """リクエストが来た時の通知音を鳴らす(config の music_sound。空なら鳴らさない)。"""
+        """リクエストが来た・誰かが入ってきた時の通知音(config の music_sound。空なら鳴らさない)。"""
         name = (self.config.get("music_sound") or "").strip()
         if not name:
             return
@@ -390,192 +494,26 @@ class MusicSync:
         try:
             import winsound  # Windows の標準機能(追加のインストール不要)
 
-            # 鳴らしている間も他の処理を止めないよう、非同期で鳴らす
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         except Exception as e:
             _log(f"通知音を鳴らせませんでした: {e}")
 
-    # ------------------------------------------------------------------ 同期の中身
-    def _partner_names(self):
-        if not self.session:
-            return ""
-        return "、".join(self.session["members"].values())
-
-    def _end_session_locked(self):
-        self.session = None
-        self.shared = None
-        self.target = None
-        self.needs_click = False
-        self.waiting_ext_since = None
-
-    def _expire_incoming(self, sid):
-        with self.lock:
-            self.pending_in.pop(sid, None)
-
-    def _apply_remote_locked(self, data, age):
-        song_id = data.get("songId")
-        kind = data.get("kind") or "song"
-        if not song_id or kind not in SUPPORTED_KINDS:
-            return
-        now = self.clock()
-        playing = bool(data.get("isPlaying"))
-        position = float(data.get("position") or 0)
-        if playing:
-            position += age + LATENCY_COMP_SEC
-        snap = {
-            "songId": str(song_id),
-            "kind": kind,
-            "title": data.get("title"),
-            "artist": data.get("artist"),
-            "playing": playing,
-            "position": position,
-            "at": now,
-        }
-        has_tab = self._primary_tab_locked() is not None
-        self.target = dict(snap, deadline=now + (15 if has_tab else 45))
-        self.shared = snap
-        self.last_cmd = {}
-        _log(f"相手の状態に合わせます: {snap['title']} / {snap['artist']} ({'再生' if playing else '一時停止'} {position:.1f}秒)")
-
-    @staticmethod
-    def _expected_position(snap, now):
-        if snap["playing"]:
-            return snap["position"] + (now - snap["at"])
-        return snap["position"]
-
-    def _new_cmd(self, action, **kw):
-        self.cmd_seq += 1
-        self.last_cmd[action] = self.clock()
-        cmd = {"id": self.cmd_seq, "action": action, "issuedAt": int(self.wall_clock() * 1000)}
-        cmd.update(kw)
-        return cmd
-
-    def _converge_locked(self, st, now):
-        """相手から来た状態(target)に、こちらのプレイヤーを近づける指示を作る。"""
-        t = self.target
-        if now > t["deadline"]:
-            _log("相手の状態に合わせきれないまま時間切れになりました")
-            self.target = None
-            return []
-        expected = self._expected_position(t, now)
-        since = lambda action: now - self.last_cmd.get(action, -1e9)
-
-        if st.get("songId") != t["songId"]:
-            if since("load") > 6:
-                return [
-                    self._new_cmd(
-                        "load", songId=t["songId"], kind=t["kind"], position=expected, play=t["playing"]
-                    )
-                ]
-            return []
-
-        ps = st.get("playbackState")
-        if ps in (PS_LOADING, PS_SEEKING, PS_WAITING, PS_STALLED):
-            return []
-
-        cmds = []
-        position = float(st.get("position") or 0)
-        pos_ok = abs(position - expected) <= 2.0
-        play_ok = bool(st.get("isPlaying")) == t["playing"]
-        if not pos_ok and since("seek") > 2.5 and since("load") > 2.5:
-            cmds.append(self._new_cmd("seek", position=expected, play=t["playing"]))
-        if not play_ok and since("play") > 2.5 and since("load") > 2.5:
-            cmds.append(self._new_cmd("play" if t["playing"] else "pause"))
-        if pos_ok and play_ok:
-            self.target = None
-            self.needs_click = False
-            self.shared = {k: t[k] for k in ("songId", "kind", "title", "artist", "playing")}
-            self.shared.update(position=expected, at=now)
-        return cmds
-
-    def _snapshot_from_local(self, st, now):
-        return {
-            "songId": st.get("songId"),
-            "kind": st.get("kind") or "song",
-            "title": st.get("title"),
-            "artist": st.get("artist"),
-            "playing": bool(st.get("isPlaying")),
-            "position": float(st.get("position") or 0),
-            "at": now,
-        }
-
-    def _broadcast_local_locked(self, st, now):
-        snap = self._snapshot_from_local(st, now)
-        self.shared = snap
-        data = {k: snap[k] for k in ("songId", "kind", "title", "artist")}
-        data.update(isPlaying=snap["playing"], position=round(snap["position"], 2))
-        _log(f"こちらの操作を相手に送ります: {snap['title']} ({'再生' if snap['playing'] else '一時停止'} {snap['position']:.1f}秒)")
-        self._send("*", "state", self.session["id"], data)
-
-    def _detect_local_change_locked(self, st, now):
-        """こちらで曲を選んだ・再生した・止めた・シークした、を見つけて相手に送る。"""
-        if not st.get("songId") or (st.get("kind") or "song") not in SUPPORTED_KINDS:
-            return
-        ps = st.get("playbackState")
-        playing = bool(st.get("isPlaying"))
-        sh = self.shared
-
-        if sh is None or st["songId"] != sh["songId"]:
-            # 最初の再生 / 別の曲になった → 実際に流れ始めたら送る
-            if playing and ps == PS_PLAYING:
-                self._broadcast_local_locked(st, now)
-            return
-
-        if ps in TRANSIENT_STATES:
-            return
-        position = float(st.get("position") or 0)
-        if playing != sh["playing"]:
-            if not playing:
-                if ps != PS_PAUSED:
-                    return
-                duration = float(st.get("duration") or 0)
-                if duration and position >= duration - 2.5:
-                    return  # 曲が最後まで終わっただけ(相手を止めない)
-            self._broadcast_local_locked(st, now)
-            return
-
-        expected = self._expected_position(sh, now)
-        if abs(position - expected) > 3.0:
-            self._broadcast_local_locked(st, now)  # シークした
-
     # ------------------------------------------------------------------ 拡張機能とのやり取り
-    def _primary_tab_locked(self):
-        now = self.clock()
-        for tab_id in [t for t, v in self.tabs.items() if now - v["at"] > TAB_ALIVE_SEC]:
-            del self.tabs[tab_id]
-        if not self.tabs:
-            return None
-        # いちばん最近まで曲が流れていたタブ。どれも流れていなければ、いちばん最近連絡があったタブ
-        best = max(self.tabs.values(), key=lambda v: (v.get("last_playing") or 0, v["at"]))
-        return best
-
-    def handle_tick(self, tab_id, state, results):
-        now = self.clock()
-        state = state or {}
+    def handle_ext_tick(self, data):
         with self.lock:
-            prev = self.tabs.get(tab_id) or {}
-            entry = {"at": now, "state": state, "last_playing": prev.get("last_playing"), "id": tab_id}
-            if state.get("isPlaying"):
-                entry["last_playing"] = now
-                self.needs_click = False
-            self.tabs[tab_id] = entry
+            self.last_ext_tick = self.clock()
             self.ever_tick = True
             self.waiting_ext_since = None
-            for res in results or []:
-                if not res.get("ok"):
-                    _log(f"拡張機能で指示が失敗しました: {res.get('error')}")
-                    if res.get("error") == "autoplay":
-                        self.needs_click = True
-
-            cmds = []
-            primary = self._primary_tab_locked()
-            if self.session and primary is entry and state.get("available"):
-                if self.target:
-                    cmds = self._converge_locked(state, now)
-                else:
-                    self._detect_local_change_locked(state, now)
-            ui = self._ui_locked(is_primary=primary is entry)
-        return {"commands": cmds, "ui": ui, "extVersion": self.extension_version()}
+            service = (data or {}).get("service")
+            if service in SERVICE_URLS:
+                self.ext_service = service
+            if self.joined:
+                room = {"id": self.joined["id"], "token": self.joined["token"], "role": "friend", "owner": self.joined["owner"]}
+            elif self.own_token:
+                room = {"id": self.room_id, "token": self.own_token, "role": "owner", "owner": self.pc_label}
+            else:
+                room = None
+            return {"room": room, "ui": self._ui_locked(), "extVersion": self.extension_version()}
 
     def handle_ext_action(self, action, sid=None):
         if action == "request":
@@ -588,19 +526,21 @@ class MusicSync:
             self.accept(sid)
         elif action == "decline" and sid:
             self.decline(sid)
+        elif action == "tab-closed":
+            # 曲のタブを全部閉じた → 友達の部屋にいれば出る(また入るには、もう一度招待を受け取る)
+            with self.lock:
+                joined = self.joined
+            if joined:
+                self.stop(notify=False)
+                self.notifier.toast(f"音楽のタブを閉じたので、{joined['owner']} の部屋から出ました")
         with self.lock:
-            return {"ui": self._ui_locked(is_primary=True)}
+            return {"ui": self._ui_locked()}
 
-    def _ui_locked(self, is_primary):
+    def _ui_locked(self):
         now = self.clock()
         return {
-            "sharing": self.session is not None,
-            "partners": self._partner_names(),
             "pending": self.pending_out is not None,
-            "incoming": [
-                {"sessionId": sid, "label": v["label"]} for sid, v in self.pending_in.items() if v["expires"] > now
-            ],
-            "needsClick": bool(self.needs_click and self.session and is_primary),
+            "incoming": [{"sessionId": s, "label": v["label"]} for s, v in self.pending_in.items() if v["expires"] > now],
             "hotkey": self.hotkey_label,
         }
 
@@ -609,7 +549,7 @@ class MusicSync:
             mtime = os.path.getmtime(EXTENSION_MANIFEST)
         except OSError:
             return None
-        cached_mtime, cached_version = self._ext_version_cache
+        cached_mtime, _ = self._ext_version_cache
         if cached_mtime != mtime:
             self._ext_version_cache = (mtime, read_extension_version())
         return self._ext_version_cache[1]
@@ -632,15 +572,15 @@ class MusicSync:
                 self.pending_out = None
             for sid in [s for s, v in self.pending_in.items() if now > v["expires"]]:
                 del self.pending_in[sid]
-            if self.session and self.waiting_ext_since and now - self.waiting_ext_since > 20:
+            if self.joined and self.waiting_ext_since and now - self.waiting_ext_since > 20:
                 self.waiting_ext_since = None
                 missing_ext = not self.ever_tick
         if expired_out:
             self._send("*", "stop", expired_out, {"reason": "timeout"})
-            self.notifier.toast("曲の共有リクエストに応答がありませんでした")
+            self.notifier.toast("リクエストに応答がありませんでした")
         if missing_ext:
             self.notifier.toast(
-                "Apple Music の拡張機能から連絡がありません。拡張機能を入れていない場合は、"
+                "ブラウザの拡張機能から連絡がありません。拡張機能を入れていない場合は、"
                 "開いたフォルダをブラウザの拡張機能ページで読み込んでください",
                 seconds=12,
             )
@@ -672,7 +612,6 @@ class MusicSync:
 
             def do_POST(self):
                 # ふつうのWebページから勝手に操作されないよう、拡張機能だけが付けるヘッダーを必須にする
-                # (このヘッダーが付くとブラウザは事前確認をするが、それには応じないので普通のページからは送れない)
                 if self.headers.get("X-PCS-Ext") != "1":
                     self._json(403, {"error": "forbidden"})
                     return
@@ -683,7 +622,7 @@ class MusicSync:
                     self._json(400, {"error": "invalid json"})
                     return
                 if self.path == "/ext/tick":
-                    resp = sync.handle_tick(data.get("tabId"), data.get("state"), data.get("results"))
+                    resp = sync.handle_ext_tick(data)
                 elif self.path == "/ext/action":
                     resp = sync.handle_ext_action(data.get("action"), data.get("sessionId"))
                 else:
@@ -692,17 +631,17 @@ class MusicSync:
                 self._json(200, resp)
 
         class Server(ThreadingHTTPServer):
-            # Windows ではこれを True にすると、同じポートを2つのプログラムが同時に使えてしまう
-            # (エージェントを2重に起動した時に、拡張機能の連絡がどちらに届くか分からなくなる)
-            allow_reuse_address = False
+            # Windows ではこれを True にすると、同じポートを2つのプログラムが同時に使えてしまう(2重起動の時に困る)。
+            # Linux/Mac では True にしないと、再起動の直後に閉じたばかりの接続が残っていて、しばらく開けない。
+            allow_reuse_address = os.name != "nt"
             daemon_threads = True
 
-        for attempt in range(20):
+        for attempt in range(120):  # 再起動の直後は開けないことがあるので、最大1分ほど粘る
             try:
                 httpd = Server(("127.0.0.1", MUSIC_PORT), Handler)
                 break
             except OSError as e:
-                if attempt == 19:
+                if attempt == 119:
                     _log(f"拡張機能用のポート {MUSIC_PORT} を開けませんでした(ほかのプログラムが使用中?): {e}")
                     return
                 time.sleep(0.5)

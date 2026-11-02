@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一緒に聴く</title>
+<style>
+  :root { --bg:#14151c; --card:#1f2130; --line:#33364a; --text:#f2f3f7; --muted:#a9adc1; --accent:#fa2d48; --ok:#3ecf8e; --warn:#f5b041; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 -apple-system, "Segoe UI", "Yu Gothic UI", "Hiragino Sans", sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 1.45rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 1.02rem; margin: 0 0 12px; }
+  label { display:block; font-size: .85rem; color: var(--muted); margin: 14px 0 6px; }
+  input[type=text], input[type=password] { width:100%; padding: 10px 12px; border-radius: 10px; border:1px solid var(--line); background:#151722; color:var(--text); font: inherit; }
+  .services { display:grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .services label { margin:0; display:flex; align-items:center; justify-content:center; padding: 10px 6px; border:1px solid var(--line); border-radius:10px; cursor:pointer; color:var(--text); font-size:.9rem; text-align:center; }
+  .services input { display:none; }
+  .services input:checked + span { color:#fff; }
+  .services label:has(input:checked) { border-color: var(--accent); background: rgba(250,45,72,.12); }
+  button, .btn { display:inline-block; margin-top: 18px; width:100%; padding: 12px; border:0; border-radius: 10px; background: var(--accent); color:#fff; font: inherit; font-weight: 700; cursor:pointer; text-align:center; text-decoration:none; }
+  button:disabled { opacity:.5; cursor:default; }
+  .btn.secondary { background:#3a3d52; }
+  .err { color: #ff8a8a; margin-top: 10px; min-height: 1.4em; }
+  .status { display:flex; align-items:center; gap:10px; }
+  .dot { width:10px; height:10px; border-radius:50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); }
+  ol { padding-left: 1.3em; margin: 8px 0 0; }
+  li { margin: 8px 0; }
+  code { background:#151722; border:1px solid var(--line); border-radius:6px; padding: 1px 6px; font-size:.88em; word-break: break-all; }
+  .note { color: var(--muted); font-size: .85rem; margin-top: 12px; }
+  .hidden { display:none; }
+  .ok { color: var(--ok); font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">一緒に聴く</h1>
+  <p class="sub" id="subtitle">読み込み中…</p>
+
+  <section class="card hidden" id="closedCard">
+    <div class="status"><span class="dot"></span><span id="closedText">今は部屋が開いていません。</span></div>
+  </section>
+
+  <section class="card hidden" id="joinCard">
+    <h2>参加する</h2>
+    <form id="joinForm" autocomplete="off">
+      <label for="name">あなたの名前(みんなに表示されます)</label>
+      <input type="text" id="name" maxlength="40" required>
+      <label>使っている音楽サービス</label>
+      <div class="services">
+        <label><input type="radio" name="service" value="apple" required><span>Apple Music</span></label>
+        <label><input type="radio" name="service" value="spotify"><span>Spotify</span></label>
+        <label><input type="radio" name="service" value="ytm"><span>YouTube Music</span></label>
+        <label><input type="radio" name="service" value="youtube"><span>YouTube</span></label>
+      </div>
+      <label for="password">パスワード</label>
+      <input type="password" id="password" required>
+      <button type="submit" id="joinButton">参加する</button>
+      <div class="err" id="joinError"></div>
+    </form>
+  </section>
+
+  <section class="card hidden" id="installCard">
+    <h2>拡張機能を入れる(最初の1回だけ)</h2>
+    <p id="installReason">曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。</p>
+    <a class="btn" href="/listen-ext.zip" download>拡張機能をダウンロード(zip)</a>
+    <ol>
+      <li>ダウンロードした <code>pcs-music-share.zip</code> を右クリックして「すべて展開」を選びます。</li>
+      <li>ブラウザのアドレスバーに <code>chrome://extensions</code> と入力して開きます(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)。</li>
+      <li>右上の「デベロッパーモード」をオンにします。オンのままにしておいてください。</li>
+      <li>「パッケージ化されていない拡張機能を読み込む」を押して、展開してできた <code>pcs-music-share</code> フォルダを選びます。</li>
+      <li>このページを再読み込みします(パスワードを入れ直す必要はありません)。</li>
+    </ol>
+    <p class="note" id="updateNote">新しい版に入れ替える時は、古い <code>pcs-music-share</code> フォルダの中身を新しいものに置き換えてから、拡張機能ページでこの拡張機能の「更新」(↻)を押してください。</p>
+  </section>
+
+  <section class="card hidden" id="readyCard">
+    <h2>準備ができました</h2>
+    <p id="readyText"></p>
+    <button id="enterButton">参加して音楽サービスを開く</button>
+    <div class="err" id="enterError"></div>
+  </section>
+
+  <section class="card hidden" id="doneCard">
+    <p class="ok">参加しました</p>
+    <p id="doneText"></p>
+    <p class="note">音楽サービスのページの右下に、参加中の人と「退出」ボタンが出ます。誰かが曲を選ぶと、あなたのサービスでも同じ曲が流れます。あなたが曲を選ぶと、みんなにも流れます。</p>
+  </section>
+</main>
+<script>
+(function () {
+  const SERVICE_NAMES = { apple: 'Apple Music', spotify: 'Spotify', ytm: 'YouTube Music', youtube: 'YouTube' };
+  const roomId = (location.pathname.match(/^\/listen\/([a-z0-9-]+)/) || [])[1] || '';
+  const storeKey = 'pcs-listen-' + roomId;
+  const $ = (id) => document.getElementById(id);
+  const show = (id, on) => $(id).classList.toggle('hidden', !on);
+  let info = null;
+  let extVersion = null;
+  let creds = null;
+
+  try { creds = JSON.parse(sessionStorage.getItem(storeKey) || 'null'); } catch (e) {}
+
+  // 拡張機能は、このページに入り込んで「入っているよ(版はこれ)」と知らせてくる(listen.js)
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || !e.data || e.data.source !== 'pcs-ext') return;
+    if (e.data.type === 'hello') { extVersion = e.data.version; render(); }
+    if (e.data.type === 'joined') onJoined(e.data);
+    if (e.data.type === 'join-error') { $('enterError').textContent = e.data.error || '拡張機能に渡せませんでした'; $('enterButton').disabled = false; }
+  });
+  window.postMessage({ source: 'pcs-listen', type: 'ping' }, '*');
+
+  function versionLess(a, b) {
+    const pa = String(a || '0').split('.').map(Number), pb = String(b || '0').split('.').map(Number);
+    for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0); }
+    return false;
+  }
+
+  function render() {
+    if (!info) return;
+    const owner = info.owner || roomId;
+    $('title').textContent = `${owner} と一緒に聴く`;
+    if (!info.open || !info.guestsAllowed) {
+      $('subtitle').textContent = '';
+      $('closedText').textContent = !info.open ? `今は ${owner} の部屋が開いていません。あとでもう一度開いてください。` : 'この部屋は今、リンクからの参加を受け付けていません。';
+      show('closedCard', true); show('joinCard', false); show('installCard', false); show('readyCard', false);
+      return;
+    }
+    $('subtitle').textContent = 'パスワードを入れると、同じ曲を同時に聴けます。誰が曲を選んでも、みんなに流れます。';
+    show('closedCard', false);
+    show('joinCard', !creds);
+    const outdated = extVersion && info.extVersion && versionLess(extVersion, info.extVersion);
+    const needInstall = !!creds && (!extVersion || outdated);
+    show('installCard', needInstall);
+    $('installReason').textContent = outdated
+      ? `拡張機能が古い版(${extVersion})です。新しい版(${info.extVersion})をダウンロードして入れ替えてください。`
+      : '曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。';
+    show('readyCard', !!creds && !!extVersion && !outdated && !$('doneCard').classList.contains('shown'));
+    if (creds) $('readyText').textContent = `${creds.label} として、${SERVICE_NAMES[creds.service]} で参加します。`;
+  }
+
+  async function loadInfo() {
+    try {
+      const r = await fetch('/api/room/info?room=' + encodeURIComponent(roomId), { cache: 'no-store' });
+      info = await r.json();
+    } catch (e) {
+      $('subtitle').textContent = 'サーバーに繋がりませんでした。少し待ってから再読み込みしてください。';
+      return;
+    }
+    render();
+  }
+
+  $('joinForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const service = (document.querySelector('input[name=service]:checked') || {}).value;
+    const label = $('name').value.trim();
+    const password = $('password').value;
+    if (!service || !label || !password) return;
+    $('joinButton').disabled = true;
+    $('joinError').textContent = '';
+    try {
+      const r = await fetch('/api/room/join', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: roomId, label, service, password }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        const msg = { 'wrong-password': 'パスワードが違います。', 'too-many-attempts': '間違いが多すぎます。10分ほど待ってからもう一度試してください。', 'guests-not-allowed': 'この部屋は今、リンクからの参加を受け付けていません。', 'room is not open': '部屋が閉じられました。' }[j.error];
+        $('joinError').textContent = msg || ('参加できませんでした: ' + (j.error || r.status));
+        return;
+      }
+      creds = { relay: location.origin, room: roomId, token: j.token, label, service, owner: j.owner };
+      sessionStorage.setItem(storeKey, JSON.stringify(creds));
+      $('password').value = '';
+      render();
+    } catch (err) {
+      $('joinError').textContent = 'サーバーに繋がりませんでした。';
+    } finally {
+      $('joinButton').disabled = false;
+    }
+  });
+
+  $('enterButton').addEventListener('click', () => {
+    if (!creds) return;
+    $('enterButton').disabled = true;
+    $('enterError').textContent = '';
+    window.postMessage({ source: 'pcs-listen', type: 'join', creds }, '*');
+    setTimeout(() => {
+      if (!$('doneCard').classList.contains('shown')) {
+        $('enterButton').disabled = false;
+        $('enterError').textContent = '拡張機能から返事がありません。拡張機能ページで有効になっているか確認して、このページを再読み込みしてください。';
+      }
+    }, 4000);
+  });
+
+  function onJoined(data) {
+    $('doneCard').classList.add('shown');
+    show('doneCard', true); show('readyCard', false);
+    $('doneText').textContent = data.opened
+      ? `${SERVICE_NAMES[creds.service]} を新しいタブで開きました。そのタブで曲を流してください。`
+      : `開いている ${SERVICE_NAMES[creds.service]} のタブで、そのまま聴けます。`;
+  }
+
+  loadInfo();
+  setInterval(loadInfo, 30000);
+})();
+</script>
+</body>
+</html>

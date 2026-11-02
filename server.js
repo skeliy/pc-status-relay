@@ -15,9 +15,11 @@
 //        VIEW_TOKEN(友達にも共有する閲覧用トークン)では見られないし、
 //        ダッシュボード上にも「履歴」へのリンクは一切表示されない(自分のトークンで開いた時だけ出る)。
 //
-//   - 曲の共有(Apple Music)のために、エージェント同士のメッセージを中継する
+//   - 曲の共有のために、エージェント同士のリクエスト(Ctrl+Alt+M)を中継する
 //     POST /api/music/send でメッセージを送り、GET /api/music/poll で受け取る(ロングポーリング)。
-//     中身(リクエスト・許可・再生中の曲など)はサーバーでは解釈せず、届けるだけ。
+//     中身(リクエスト・許可など)はサーバーでは解釈せず、届けるだけ。
+//   - 曲の共有の「部屋」(rooms.js)。部屋の中の全員が曲を変えられ、Discord のリンクから
+//     /listen/<部屋> を開いた人もパスワードで参加できる。拡張機能の zip も /listen-ext.zip で配る。
 //     どちらも WRITE_TOKEN が必要(エージェントだけが使う)。
 //
 // 外部ライブラリ不使用(Node.js標準の http / fs モジュールのみ)。
@@ -48,6 +50,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const rooms = require('./rooms');
 
 const PORT = process.env.PORT || 3000;
 const WRITE_TOKEN = process.env.WRITE_TOKEN || '';
@@ -416,6 +419,18 @@ function musicRecipients(from, to) {
   return online.includes(to) ? [to] : [];
 }
 
+// 部屋からの招待(rooms.js)を、PC Status のエージェントにも届けられるようにする
+rooms.setAgentHooks({
+  online: (pcId) => !!musicLastPoll[pcId] && Date.now() - musicLastPoll[pcId].at <= MUSIC_ONLINE_MS,
+  push: (pcId, fields) => {
+    if (!musicLastPoll[pcId]) return;
+    const message = Object.assign({ seq: ++musicSeq, at: Date.now(), to: pcId, sessionId: '', data: {} }, fields);
+    if (!musicQueues[pcId]) musicQueues[pcId] = [];
+    musicQueues[pcId].push(message);
+    musicWake(pcId);
+  },
+});
+
 function handleMusicSend(req, res) {
   if (!isWriteAuthorized(req)) {
     sendJson(res, 401, { error: 'unauthorized' });
@@ -640,6 +655,11 @@ const server = http.createServer((req, res) => {
     if (!Number.isFinite(days) || days <= 0) days = 7;
     days = Math.min(days, HISTORY_RETENTION_DAYS);
     sendJson(res, 200, buildHistoryDetail(id, key, days));
+    return;
+  }
+
+  // 曲の共有の「部屋」と、Discord から来た人用の参加ページ(rooms.js)
+  if (rooms.handle(req, res, parsedUrl, { sendJson, sendHtml, sendPlain, readJsonBody, isWriteAuthorized })) {
     return;
   }
 

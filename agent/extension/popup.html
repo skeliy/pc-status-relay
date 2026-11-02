@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#1b1d27; --card:#252836; --line:#363a4f; --text:#f2f3f7; --muted:#a9adc1; --accent:#fa2d48; --ok:#3ecf8e; }
+  * { box-sizing: border-box; }
+  body { margin:0; width: 340px; background:var(--bg); color:var(--text); font: 13px/1.5 -apple-system, "Segoe UI", "Yu Gothic UI", "Hiragino Sans", sans-serif; }
+  header { display:flex; align-items:center; gap:8px; padding: 12px 14px; border-bottom:1px solid var(--line); }
+  header img { width:22px; height:22px; }
+  header b { font-size: 14px; flex:1; }
+  header .ver { color: var(--muted); font-size: 11px; }
+  section { padding: 10px 14px; border-bottom:1px solid var(--line); }
+  section:last-child { border-bottom:0; }
+  h2 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 0 0 6px; }
+  .row { display:flex; align-items:center; gap:8px; padding: 5px 0; }
+  .row .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .svc { color: var(--muted); font-size: 11px; }
+  .dot { width:8px; height:8px; border-radius:50%; background: var(--muted); flex:none; }
+  .dot.on { background: var(--ok); }
+  button { font: inherit; font-size: 12px; font-weight: 600; border: 0; border-radius: 8px; padding: 5px 10px; cursor: pointer; color: #fff; background: #40435a; white-space: nowrap; }
+  button.primary { background: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .invite { background: rgba(250,45,72,.12); border:1px solid rgba(250,45,72,.4); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 12px; }
+  input, select { width: 100%; padding: 6px 8px; border-radius: 8px; border:1px solid var(--line); background:#151722; color:var(--text); font: inherit; margin-top: 4px; }
+  label { display:block; color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .notice { color: #ffd479; font-size: 12px; }
+  ol { margin: 0; padding-left: 1.2em; }
+</style>
+</head>
+<body>
+<header><img src="icons/icon48.png" alt=""><b>一緒に聴く</b><span class="ver" id="ver"></span></header>
+<div id="app"><section class="empty">読み込み中…</section></div>
+<script src="popup.js"></script>
+</body>
+</html>

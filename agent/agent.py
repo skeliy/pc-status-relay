@@ -10,7 +10,7 @@ PC status agent (Windows専用)
 「お風呂中」「準備中」のようなカスタムステータスを分数指定で設定できます
 (設定した時間が経過すると自動的に元の自動検出表示に戻ります)。
 
-さらに、Apple Music(ブラウザ版)の曲を友達と同時に再生する「曲の共有」機能があります
+さらに、Apple Music・Spotify・YouTube Music(ブラウザ版)で友達と同じ曲を同時に聴く「一緒に聴く」機能があります
 (music_sync.py / popup.py / extension フォルダ。使い方は README.md)。
 
 必要なライブラリのインストール:
@@ -71,6 +71,9 @@ DEFAULT_CONFIG = {
     "music_enabled": True,
     "music_hotkey": "ctrl+alt+m",
     "music_sound": "notify.wav",
+    "listen_room": "",
+    "listen_password": "",
+    "music_service": "",
     "update_check_interval_min": 30,
 }
 
@@ -112,6 +115,16 @@ def _read_local_version():
             return f.read().strip()
     except OSError:
         return "0.0.0"
+
+
+def _version_tuple(v):
+    parts = []
+    for x in str(v).strip().split("."):
+        try:
+            parts.append(int(x))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
 
 
 def _safe_relative_path(name):
@@ -158,6 +171,10 @@ def self_update(config):
 
     local_version = _read_local_version()
     missing = [rel for _, rel in paths if not os.path.exists(os.path.join(SCRIPT_DIR, rel))]
+    if _version_tuple(remote_version) < _version_tuple(local_version):
+        # 手元の方が新しい(GitHub へのアップロード前など)。古い版に戻さない
+        print(f"[アップデート確認] 手元の方が新しいので何もしません (手元 {local_version} / 公開 {remote_version})")
+        return
     if remote_version == local_version and not missing:
         print(f"[アップデート確認] 最新版です (version {local_version})")
         return
@@ -205,7 +222,7 @@ def start_periodic_update(config, override, music):
     def busy():
         if override.snapshot()[0]:
             return True
-        return music is not None and (music.session is not None or music.pending_out is not None)
+        return music is not None and music.is_busy()
 
     def loop():
         while True:
