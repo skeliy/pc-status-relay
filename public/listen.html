@@ -1,114 +1,402 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>一緒に聴く</title>
+<meta name="color-scheme" content="dark">
+<title>Listen together</title>
 <style>
-  :root { --bg:#14151c; --card:#1f2130; --line:#33364a; --text:#f2f3f7; --muted:#a9adc1; --accent:#fa2d48; --ok:#3ecf8e; --warn:#f5b041; }
+  :root {
+    --bg: #0d0e12;
+    --surface: #16171d;
+    --surface-2: #1d1f27;
+    --line: #2a2c36;
+    --line-strong: #3a3d4a;
+    --text: #f4f5f8;
+    --muted: #9a9eb0;
+    --faint: #6b6f80;
+    --accent: #fa2d48;
+    --accent-soft: rgba(250, 45, 72, .12);
+    --ok: #35c98a;
+    --danger: #ff7b7b;
+    --radius: 16px;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 -apple-system, "Segoe UI", "Yu Gothic UI", "Hiragino Sans", sans-serif; }
-  main { max-width: 520px; margin: 0 auto; padding: 32px 16px 48px; }
-  h1 { font-size: 1.45rem; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 24px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
-  .card h2 { font-size: 1.02rem; margin: 0 0 12px; }
-  label { display:block; font-size: .85rem; color: var(--muted); margin: 14px 0 6px; }
-  input[type=text], input[type=password] { width:100%; padding: 10px 12px; border-radius: 10px; border:1px solid var(--line); background:#151722; color:var(--text); font: inherit; }
-  .services { display:grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .services label { margin:0; display:flex; align-items:center; justify-content:center; padding: 10px 6px; border:1px solid var(--line); border-radius:10px; cursor:pointer; color:var(--text); font-size:.9rem; text-align:center; }
-  .services input { display:none; }
-  .services input:checked + span { color:#fff; }
-  .services label:has(input:checked) { border-color: var(--accent); background: rgba(250,45,72,.12); }
-  button, .btn { display:inline-block; margin-top: 18px; width:100%; padding: 12px; border:0; border-radius: 10px; background: var(--accent); color:#fff; font: inherit; font-weight: 700; cursor:pointer; text-align:center; text-decoration:none; }
-  button:disabled { opacity:.5; cursor:default; }
-  .btn.secondary { background:#3a3d52; }
-  .err { color: #ff8a8a; margin-top: 10px; min-height: 1.4em; }
-  .status { display:flex; align-items:center; gap:10px; }
-  .dot { width:10px; height:10px; border-radius:50%; background: var(--muted); flex: none; }
-  .dot.on { background: var(--ok); }
-  ol { padding-left: 1.3em; margin: 8px 0 0; }
-  li { margin: 8px 0; }
-  code { background:#151722; border:1px solid var(--line); border-radius:6px; padding: 1px 6px; font-size:.88em; word-break: break-all; }
-  .note { color: var(--muted); font-size: .85rem; margin-top: 12px; }
-  .hidden { display:none; }
-  .ok { color: var(--ok); font-weight: 700; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    min-height: 100vh;
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(900px 420px at 50% -120px, rgba(250, 45, 72, .16), transparent 70%),
+      var(--bg);
+  }
+  .hidden { display: none !important; }
+
+  /* top bar */
+  header {
+    max-width: 480px; margin: 0 auto; padding: 18px 16px 0;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; color: var(--muted); }
+  .logo {
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(140deg, #ff5a6e, #e01b3c); box-shadow: 0 4px 14px rgba(250, 45, 72, .35);
+  }
+  .lang { position: relative; }
+  .lang-btn {
+    display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px 0 9px;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+    color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .lang-btn:hover, .lang-btn[aria-expanded="true"] { color: var(--text); border-color: var(--line-strong); }
+  .lang-menu {
+    position: absolute; right: 0; top: 40px; min-width: 140px; padding: 6px; z-index: 10;
+    background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  }
+  .lang-menu button {
+    display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--text);
+    font: inherit; font-size: 14px; cursor: pointer; text-align: left;
+  }
+  .lang-menu button:hover { background: rgba(255, 255, 255, .06); }
+  .lang-menu .check { color: var(--accent); visibility: hidden; }
+  .lang-menu button[aria-checked="true"] .check { visibility: visible; }
+
+  /* main */
+  main { max-width: 480px; margin: 0 auto; padding: 36px 16px 56px; }
+  .hero { text-align: center; margin-bottom: 26px; }
+  .hero h1 { font-size: 26px; line-height: 1.25; letter-spacing: -.01em; margin: 0 0 8px; font-weight: 700; }
+  .hero p { margin: 0 auto; max-width: 360px; color: var(--muted); }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 22px; box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset;
+  }
+  .card + .card { margin-top: 14px; }
+  .card h2 { font-size: 16px; margin: 0 0 4px; font-weight: 650; }
+  .card .lead { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+
+  .field { display: block; margin-top: 18px; }
+  .field:first-child { margin-top: 0; }
+  .field > span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 7px; }
+  input[type=text], input[type=password] {
+    width: 100%; height: 44px; padding: 0 14px; border-radius: 11px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=text]:focus, input[type=password]:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .services { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .svc { position: relative; }
+  .svc input { position: absolute; opacity: 0; pointer-events: none; }
+  .svc span {
+    display: flex; align-items: center; gap: 9px; height: 44px; padding: 0 12px;
+    border: 1px solid var(--line); border-radius: 11px; background: var(--bg);
+    font-size: 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: border-color .15s, background .15s;
+  }
+  .svc span::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+  .svc:hover span { border-color: var(--line-strong); }
+  .svc input:checked + span { border-color: var(--accent); background: var(--accent-soft); }
+  .svc input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 46px;
+    margin-top: 20px; border: 0; border-radius: 12px; background: var(--accent); color: #fff;
+    font: inherit; font-weight: 650; cursor: pointer; text-decoration: none;
+    transition: filter .15s, transform .05s;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .5; cursor: default; filter: none; }
+  .err { color: var(--danger); font-size: 14px; margin-top: 10px; min-height: 1.2em; }
+  .err:empty { display: none; }
+
+  .state { display: flex; align-items: center; gap: 12px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px rgba(53, 201, 138, .15); }
+
+  .steps { list-style: none; counter-reset: s; margin: 20px 0 0; padding: 0; }
+  .steps li { counter-increment: s; display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .steps li:first-child { border-top: 0; padding-top: 0; }
+  .steps li::before {
+    content: counter(s); flex: none; width: 22px; height: 22px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--muted);
+  }
+  code {
+    font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; padding: 1px 6px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--line); white-space: nowrap;
+  }
+  .note { color: var(--faint); font-size: 13px; margin: 14px 0 0; }
+
+  .who {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 4px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .avatar {
+    width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none;
+    background: var(--surface-2); border: 1px solid var(--line-strong); font-weight: 700;
+  }
+  .who b { display: block; font-weight: 600; }
+  .who small { color: var(--muted); font-size: 13px; }
+
+  .success { text-align: center; }
+  .success .icon {
+    width: 52px; height: 52px; margin: 2px auto 14px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(53, 201, 138, .14); color: var(--ok);
+  }
+  .success h2 { font-size: 18px; }
+  .success p { color: var(--muted); margin: 6px 0 0; font-size: 14px; }
+
+  footer { text-align: center; color: var(--faint); font-size: 12px; margin-top: 28px; }
+
+  @media (max-width: 380px) {
+    .hero h1 { font-size: 22px; }
+    .card { padding: 18px; }
+    .svc span { padding: 0 10px; font-size: 13.5px; }
+  }
+  @media (max-width: 330px) {
+    .services { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
+<header>
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="7" rx="1.5" fill="#fff"/><rect x="17" y="14" width="4" height="7" rx="1.5" fill="#fff"/></svg>
+    </span>
+    <span data-i18n="brand"></span>
+  </div>
+  <div class="lang">
+    <button class="lang-btn" id="langBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Language">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+      <span id="langLabel">EN</span>
+    </button>
+    <div class="lang-menu hidden" id="langMenu" role="menu">
+      <button type="button" role="menuitemradio" data-lang="en">English <span class="check">✓</span></button>
+      <button type="button" role="menuitemradio" data-lang="ja">日本語 <span class="check">✓</span></button>
+    </div>
+  </div>
+</header>
+
 <main>
-  <h1 id="title">一緒に聴く</h1>
-  <p class="sub" id="subtitle">読み込み中…</p>
+  <div class="hero">
+    <h1 id="title" data-i18n="titleDefault"></h1>
+    <p id="subtitle" data-i18n="loading"></p>
+  </div>
 
   <section class="card hidden" id="closedCard">
-    <div class="status"><span class="dot"></span><span id="closedText">今は部屋が開いていません。</span></div>
+    <div class="state"><span class="dot"></span><span id="closedText"></span></div>
   </section>
 
   <section class="card hidden" id="joinCard">
-    <h2>参加する</h2>
     <form id="joinForm" autocomplete="off">
-      <label for="name">あなたの名前(みんなに表示されます)</label>
-      <input type="text" id="name" maxlength="40" required>
-      <label>使っている音楽サービス</label>
-      <div class="services">
-        <label><input type="radio" name="service" value="apple" required><span>Apple Music</span></label>
-        <label><input type="radio" name="service" value="spotify"><span>Spotify</span></label>
-        <label><input type="radio" name="service" value="ytm"><span>YouTube Music</span></label>
-        <label><input type="radio" name="service" value="youtube"><span>YouTube</span></label>
+      <label class="field">
+        <span data-i18n="nameLabel"></span>
+        <input type="text" id="name" maxlength="40" required>
+      </label>
+      <div class="field">
+        <span data-i18n="serviceLabel"></span>
+        <div class="services">
+          <label class="svc" style="--c:#fa2d48"><input type="radio" name="service" value="apple" required><span>Apple Music</span></label>
+          <label class="svc" style="--c:#1ed760"><input type="radio" name="service" value="spotify"><span>Spotify</span></label>
+          <label class="svc" style="--c:#ff4e45"><input type="radio" name="service" value="ytm"><span>YouTube Music</span></label>
+          <label class="svc" style="--c:#ff0033"><input type="radio" name="service" value="youtube"><span>YouTube</span></label>
+        </div>
       </div>
-      <label for="password">パスワード</label>
-      <input type="password" id="password" required>
-      <button type="submit" id="joinButton">参加する</button>
+      <label class="field">
+        <span data-i18n="passwordLabel"></span>
+        <input type="password" id="password" required>
+      </label>
+      <button class="btn" type="submit" id="joinButton" data-i18n="joinButton"></button>
       <div class="err" id="joinError"></div>
     </form>
   </section>
 
   <section class="card hidden" id="installCard">
-    <h2>拡張機能を入れる(最初の1回だけ)</h2>
-    <p id="installReason">曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。</p>
-    <a class="btn" href="/listen-ext.zip" download>拡張機能をダウンロード(zip)</a>
-    <ol>
-      <li>ダウンロードした <code>pcs-music-share.zip</code> を右クリックして「すべて展開」を選びます。</li>
-      <li>ブラウザのアドレスバーに <code>chrome://extensions</code> と入力して開きます(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)。</li>
-      <li>右上の「デベロッパーモード」をオンにします。オンのままにしておいてください。</li>
-      <li>「パッケージ化されていない拡張機能を読み込む」を押して、展開してできた <code>pcs-music-share</code> フォルダを選びます。</li>
-      <li>このページを再読み込みします(パスワードを入れ直す必要はありません)。</li>
+    <h2 data-i18n="installTitle"></h2>
+    <p class="lead" id="installReason"></p>
+    <a class="btn" href="/listen-ext.zip" download style="margin-top:0">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
+      <span data-i18n="downloadButton"></span>
+    </a>
+    <ol class="steps">
+      <li><span data-i18n-html="step1"></span></li>
+      <li><span data-i18n-html="step2"></span></li>
+      <li><span data-i18n-html="step3"></span></li>
+      <li><span data-i18n-html="step4"></span></li>
+      <li><span data-i18n-html="step5"></span></li>
     </ol>
-    <p class="note" id="updateNote">新しい版に入れ替える時は、古い <code>pcs-music-share</code> フォルダの中身を新しいものに置き換えてから、拡張機能ページでこの拡張機能の「更新」(↻)を押してください。</p>
+    <p class="note" data-i18n-html="updateNote"></p>
   </section>
 
   <section class="card hidden" id="readyCard">
-    <h2>準備ができました</h2>
-    <p id="readyText"></p>
-    <button id="enterButton">参加して音楽サービスを開く</button>
+    <h2 data-i18n="readyTitle"></h2>
+    <p class="lead" data-i18n="readyLead"></p>
+    <div class="who">
+      <span class="avatar" id="readyAvatar"></span>
+      <div><b id="readyName"></b><small id="readyService"></small></div>
+    </div>
+    <button class="btn" id="enterButton" data-i18n="enterButton"></button>
     <div class="err" id="enterError"></div>
   </section>
 
-  <section class="card hidden" id="doneCard">
-    <p class="ok">参加しました</p>
+  <section class="card success hidden" id="doneCard">
+    <div class="icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
+    <h2 data-i18n="doneTitle"></h2>
     <p id="doneText"></p>
-    <p class="note">音楽サービスのページの右下に、参加中の人と「退出」ボタンが出ます。誰かが曲を選ぶと、あなたのサービスでも同じ曲が流れます。あなたが曲を選ぶと、みんなにも流れます。</p>
+    <p class="note" data-i18n="doneNote"></p>
   </section>
+
+  <footer data-i18n="footer"></footer>
 </main>
+
 <script>
 (function () {
+  // ---- 言語(初期は英語。右上の地球のボタンで日本語に切り替えられる) ----
+  const T = {
+    en: {
+      brand: 'Listen together',
+      titleDefault: 'Listen together',
+      title: (o) => `Listen with ${o}`,
+      loading: 'Loading…',
+      subtitle: 'Enter the password to hear the same song at the same time. Anyone can pick the next song.',
+      closed: (o) => `${o}'s room isn't open right now. Please check back later.`,
+      noGuests: 'This room isn’t accepting link joins right now.',
+      serverDown: 'Couldn’t reach the server. Wait a moment and reload the page.',
+      nameLabel: 'Your name (shown to everyone)',
+      serviceLabel: 'Your music service',
+      passwordLabel: 'Password',
+      joinButton: 'Join',
+      wrongPassword: 'Wrong password.',
+      tooMany: 'Too many attempts. Please wait about 10 minutes and try again.',
+      roomClosed: 'The room was closed.',
+      joinFailed: (e) => `Couldn’t join: ${e}`,
+      noServer: 'Couldn’t reach the server.',
+      installTitle: 'Install the extension (one time only)',
+      installReason: 'A small browser extension keeps your music in sync. Works in Chrome, Edge and Brave.',
+      outdated: (a, b) => `Your extension is out of date (${a}). Download the new version (${b}) and replace it.`,
+      downloadButton: 'Download extension (.zip)',
+      step1: 'Right-click the downloaded <code>pcs-music-share.zip</code> and choose <b>Extract All</b>.',
+      step2: 'Open <code>chrome://extensions</code> in the address bar (Edge: <code>edge://extensions</code>, Brave: <code>brave://extensions</code>).',
+      step3: 'Turn on <b>Developer mode</b> in the top-right corner, and keep it on.',
+      step4: 'Click <b>Load unpacked</b> and select the extracted <code>pcs-music-share</code> folder.',
+      step5: 'Pin the red headphone icon from the puzzle menu, then reload this page. You won’t need the password again.',
+      updateNote: 'To update later, replace the contents of the old <code>pcs-music-share</code> folder with the new files, then press the reload button (↻) on the extension.',
+      readyTitle: 'You’re all set',
+      readyLead: 'Join the room and open your music service.',
+      enterButton: 'Join and open music',
+      noReply: 'The extension didn’t respond. Make sure it’s enabled on the extensions page, then reload this page.',
+      extFailed: 'Couldn’t hand off to the extension.',
+      doneTitle: 'You’re in',
+      doneOpened: (s) => `${s} opened in a new tab. Play music there.`,
+      doneExisting: (s) => `You can keep listening in your open ${s} tab.`,
+      doneNote: 'The bottom-right of the music page shows who’s listening and a Leave button. When anyone picks a song, it plays for everyone. Closing the tab leaves the room; you can be invited back from the extension icon.',
+      footer: 'Your password is only used to join this room.',
+    },
+    ja: {
+      brand: '一緒に聴く',
+      titleDefault: '一緒に聴く',
+      title: (o) => `${o} と一緒に聴く`,
+      loading: '読み込み中…',
+      subtitle: 'パスワードを入れると、同じ曲を同時に聴けます。誰が曲を選んでも、みんなに流れます。',
+      closed: (o) => `今は ${o} の部屋が開いていません。あとでもう一度開いてください。`,
+      noGuests: 'この部屋は今、リンクからの参加を受け付けていません。',
+      serverDown: 'サーバーに繋がりませんでした。少し待ってから再読み込みしてください。',
+      nameLabel: 'あなたの名前(みんなに表示されます)',
+      serviceLabel: '使っている音楽サービス',
+      passwordLabel: 'パスワード',
+      joinButton: '参加する',
+      wrongPassword: 'パスワードが違います。',
+      tooMany: '間違いが多すぎます。10分ほど待ってからもう一度試してください。',
+      roomClosed: '部屋が閉じられました。',
+      joinFailed: (e) => `参加できませんでした: ${e}`,
+      noServer: 'サーバーに繋がりませんでした。',
+      installTitle: '拡張機能を入れる(最初の1回だけ)',
+      installReason: '曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。',
+      outdated: (a, b) => `拡張機能が古い版(${a})です。新しい版(${b})をダウンロードして入れ替えてください。`,
+      downloadButton: '拡張機能をダウンロード(zip)',
+      step1: 'ダウンロードした <code>pcs-music-share.zip</code> を右クリックして、<b>すべて展開</b> を選びます。',
+      step2: 'アドレスバーに <code>chrome://extensions</code> と入力して開きます(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)。',
+      step3: '右上の <b>デベロッパーモード</b> をオンにします。オンのままにしておいてください。',
+      step4: '<b>パッケージ化されていない拡張機能を読み込む</b> を押して、展開してできた <code>pcs-music-share</code> フォルダを選びます。',
+      step5: 'パズルのマークから赤いヘッドホンのアイコンを固定して、このページを再読み込みします。パスワードを入れ直す必要はありません。',
+      updateNote: '新しい版に入れ替える時は、古い <code>pcs-music-share</code> フォルダの中身を新しいものに置き換えてから、拡張機能ページでこの拡張機能の更新ボタン(↻)を押してください。',
+      readyTitle: '準備ができました',
+      readyLead: '部屋に入って、音楽サービスを開きます。',
+      enterButton: '参加して音楽サービスを開く',
+      noReply: '拡張機能から返事がありません。拡張機能ページで有効になっているか確認して、このページを再読み込みしてください。',
+      extFailed: '拡張機能に渡せませんでした。',
+      doneTitle: '参加しました',
+      doneOpened: (s) => `${s} を新しいタブで開きました。そのタブで曲を流してください。`,
+      doneExisting: (s) => `開いている ${s} のタブで、そのまま聴けます。`,
+      doneNote: '音楽サービスのページの右下に、参加中の人と「退出」ボタンが出ます。誰かが曲を選ぶと、みんなにも同じ曲が流れます。タブを閉じると部屋から出ますが、拡張機能のアイコンからまた招待を受け取れます。',
+      footer: 'パスワードは、この部屋に入るためだけに使われます。',
+    },
+  };
+  const LANG_KEY = 'pcs-listen-lang';
+  let lang = 'en';
+  try { if (localStorage.getItem(LANG_KEY) === 'ja') lang = 'ja'; } catch (e) {}
+  const t = (key, ...args) => { const v = T[lang][key]; return typeof v === 'function' ? v(...args) : v; };
+
   const SERVICE_NAMES = { apple: 'Apple Music', spotify: 'Spotify', ytm: 'YouTube Music', youtube: 'YouTube' };
   const roomId = (location.pathname.match(/^\/listen\/([a-z0-9-]+)/) || [])[1] || '';
   const storeKey = 'pcs-listen-' + roomId;
   const $ = (id) => document.getElementById(id);
   const show = (id, on) => $(id).classList.toggle('hidden', !on);
   let info = null;
+  let infoError = false;
   let extVersion = null;
   let creds = null;
+  let joined = null; // { opened }
+  let errors = { join: null, enter: null }; // 表示中のエラー(言語を切り替えても訳し直せるように、キーで持つ)
 
   try { creds = JSON.parse(sessionStorage.getItem(storeKey) || 'null'); } catch (e) {}
 
-  // 拡張機能は、このページに入り込んで「入っているよ(版はこれ)」と知らせてくる(listen.js)
+  // ---- 言語メニュー ----
+  const langBtn = $('langBtn'), langMenu = $('langMenu');
+  function setMenu(open) { langMenu.classList.toggle('hidden', !open); langBtn.setAttribute('aria-expanded', String(open)); }
+  langBtn.addEventListener('click', (e) => { e.stopPropagation(); setMenu(langMenu.classList.contains('hidden')); });
+  document.addEventListener('click', () => setMenu(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+  langMenu.querySelectorAll('[data-lang]').forEach((b) => b.addEventListener('click', () => {
+    lang = b.dataset.lang;
+    try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+    setMenu(false);
+    applyLang();
+  }));
+
+  function applyLang() {
+    document.documentElement.lang = lang;
+    document.title = t('brand');
+    $('langLabel').textContent = lang === 'ja' ? '日本語' : 'EN';
+    langMenu.querySelectorAll('[data-lang]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.lang === lang)));
+    document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); }); // 固定の文だけ(入力は入れない)
+    render();
+  }
+
+  function errText(e) {
+    if (!e) return '';
+    return e.args ? t(e.key, ...e.args) : t(e.key);
+  }
+
+  // ---- 拡張機能とのやり取り(listen.js) ----
   window.addEventListener('message', (e) => {
     if (e.source !== window || !e.data || e.data.source !== 'pcs-ext') return;
     if (e.data.type === 'hello') { extVersion = e.data.version; render(); }
-    if (e.data.type === 'joined') onJoined(e.data);
-    if (e.data.type === 'join-error') { $('enterError').textContent = e.data.error || '拡張機能に渡せませんでした'; $('enterButton').disabled = false; }
+    if (e.data.type === 'joined') { joined = { opened: !!e.data.opened }; render(); }
+    if (e.data.type === 'join-error') {
+      errors.enter = e.data.error && !/拡張機能に渡せません/.test(e.data.error) ? { key: 'joinFailed', args: [e.data.error] } : { key: 'extFailed' };
+      $('enterButton').disabled = false;
+      render();
+    }
   });
   window.postMessage({ source: 'pcs-listen', type: 'ping' }, '*');
 
@@ -119,35 +407,49 @@
   }
 
   function render() {
+    $('joinError').textContent = errText(errors.join);
+    $('enterError').textContent = errText(errors.enter);
+    if (infoError && !info) { $('subtitle').textContent = t('serverDown'); return; }
     if (!info) return;
     const owner = info.owner || roomId;
-    $('title').textContent = `${owner} と一緒に聴く`;
-    if (!info.open || !info.guestsAllowed) {
+    $('title').textContent = t('title', owner);
+    const all = ['closedCard', 'joinCard', 'installCard', 'readyCard', 'doneCard'];
+    if (joined && creds) {
+      all.forEach((id) => show(id, id === 'doneCard'));
       $('subtitle').textContent = '';
-      $('closedText').textContent = !info.open ? `今は ${owner} の部屋が開いていません。あとでもう一度開いてください。` : 'この部屋は今、リンクからの参加を受け付けていません。';
-      show('closedCard', true); show('joinCard', false); show('installCard', false); show('readyCard', false);
+      const s = SERVICE_NAMES[creds.service];
+      $('doneText').textContent = joined.opened ? t('doneOpened', s) : t('doneExisting', s);
       return;
     }
-    $('subtitle').textContent = 'パスワードを入れると、同じ曲を同時に聴けます。誰が曲を選んでも、みんなに流れます。';
-    show('closedCard', false);
-    show('joinCard', !creds);
+    if (!info.open || !info.guestsAllowed) {
+      $('subtitle').textContent = '';
+      $('closedText').textContent = !info.open ? t('closed', owner) : t('noGuests');
+      all.forEach((id) => show(id, id === 'closedCard'));
+      return;
+    }
+    $('subtitle').textContent = t('subtitle');
     const outdated = extVersion && info.extVersion && versionLess(extVersion, info.extVersion);
     const needInstall = !!creds && (!extVersion || outdated);
+    show('closedCard', false);
+    show('joinCard', !creds);
     show('installCard', needInstall);
-    $('installReason').textContent = outdated
-      ? `拡張機能が古い版(${extVersion})です。新しい版(${info.extVersion})をダウンロードして入れ替えてください。`
-      : '曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。';
-    show('readyCard', !!creds && !!extVersion && !outdated && !$('doneCard').classList.contains('shown'));
-    if (creds) $('readyText').textContent = `${creds.label} として、${SERVICE_NAMES[creds.service]} で参加します。`;
+    show('readyCard', !!creds && !!extVersion && !outdated);
+    show('doneCard', false);
+    $('installReason').textContent = outdated ? t('outdated', extVersion, info.extVersion) : t('installReason');
+    if (creds) {
+      $('readyAvatar').textContent = (creds.label || '?').trim().charAt(0).toUpperCase();
+      $('readyName').textContent = creds.label;
+      $('readyService').textContent = SERVICE_NAMES[creds.service] || '';
+    }
   }
 
   async function loadInfo() {
     try {
       const r = await fetch('/api/room/info?room=' + encodeURIComponent(roomId), { cache: 'no-store' });
       info = await r.json();
+      infoError = false;
     } catch (e) {
-      $('subtitle').textContent = 'サーバーに繋がりませんでした。少し待ってから再読み込みしてください。';
-      return;
+      infoError = true;
     }
     render();
   }
@@ -159,7 +461,8 @@
     const password = $('password').value;
     if (!service || !label || !password) return;
     $('joinButton').disabled = true;
-    $('joinError').textContent = '';
+    errors.join = null;
+    render();
     try {
       const r = await fetch('/api/room/join', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -167,42 +470,37 @@
       });
       const j = await r.json();
       if (!r.ok) {
-        const msg = { 'wrong-password': 'パスワードが違います。', 'too-many-attempts': '間違いが多すぎます。10分ほど待ってからもう一度試してください。', 'guests-not-allowed': 'この部屋は今、リンクからの参加を受け付けていません。', 'room is not open': '部屋が閉じられました。' }[j.error];
-        $('joinError').textContent = msg || ('参加できませんでした: ' + (j.error || r.status));
+        const key = { 'wrong-password': 'wrongPassword', 'too-many-attempts': 'tooMany', 'guests-not-allowed': 'noGuests', 'room is not open': 'roomClosed' }[j.error];
+        errors.join = key ? { key } : { key: 'joinFailed', args: [j.error || r.status] };
         return;
       }
       creds = { relay: location.origin, room: roomId, token: j.token, label, service, owner: j.owner };
-      sessionStorage.setItem(storeKey, JSON.stringify(creds));
+      try { sessionStorage.setItem(storeKey, JSON.stringify(creds)); } catch (err) {}
       $('password').value = '';
-      render();
     } catch (err) {
-      $('joinError').textContent = 'サーバーに繋がりませんでした。';
+      errors.join = { key: 'noServer' };
     } finally {
       $('joinButton').disabled = false;
+      render();
     }
   });
 
   $('enterButton').addEventListener('click', () => {
     if (!creds) return;
     $('enterButton').disabled = true;
-    $('enterError').textContent = '';
+    errors.enter = null;
+    render();
     window.postMessage({ source: 'pcs-listen', type: 'join', creds }, '*');
     setTimeout(() => {
-      if (!$('doneCard').classList.contains('shown')) {
+      if (!joined) {
         $('enterButton').disabled = false;
-        $('enterError').textContent = '拡張機能から返事がありません。拡張機能ページで有効になっているか確認して、このページを再読み込みしてください。';
+        errors.enter = { key: 'noReply' };
+        render();
       }
     }, 4000);
   });
 
-  function onJoined(data) {
-    $('doneCard').classList.add('shown');
-    show('doneCard', true); show('readyCard', false);
-    $('doneText').textContent = data.opened
-      ? `${SERVICE_NAMES[creds.service]} を新しいタブで開きました。そのタブで曲を流してください。`
-      : `開いている ${SERVICE_NAMES[creds.service]} のタブで、そのまま聴けます。`;
-  }
-
+  applyLang();
   loadInfo();
   setInterval(loadInfo, 30000);
 })();
