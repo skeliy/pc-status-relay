@@ -102,6 +102,7 @@
       .person.me svg { color: #fa2d48; }
       .pname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .psvc { color: #8f93a6; font-size: 11px; white-space: nowrap; }
+      .ptag { color: #fbbf24; background: rgba(251,191,36,.14); border-radius: 6px; padding: 1px 6px; font-size: 10px; font-weight: 600; white-space: nowrap; }
     </style>
     <div class="wrap"></div>`;
   const wrap = root.querySelector('.wrap');
@@ -113,7 +114,7 @@
       else if (k === 'text') e.textContent = v;
       else e.setAttribute(k, v);
     }
-    for (const c of children || []) e.appendChild(c);
+    for (const c of children || []) if (c) e.appendChild(c);
     return e;
   }
 
@@ -198,6 +199,7 @@
             el('div', { class: 'person' + (m.id === room.you ? ' me' : '') }, [
               personIcon(),
               el('span', { class: 'pname', text: m.id === room.you ? m.label + T('youSuffix') : m.label }),
+              m.host || m.id === room.host ? el('span', { class: 'ptag', text: T('hostTag') }) : null,
               el('span', { class: 'psvc', text: SERVICE_NAMES[m.service] || '' }),
             ])
           ),
@@ -208,8 +210,9 @@
         pill([text(T('requesting')), text(T('waitingApproval'), 'muted')], [button(T('cancel'), () => sendAction('cancel'))])
       );
     } else if (ui.mode === 'guest') {
+      const hosting = !!(room && room.you && room.host === room.you);
       wrap.appendChild(
-        pill([text(T('inRoom', (room && room.owner) || '')), text(T('inRoomHint'), 'muted')], [
+        pill(hosting ? [text(T('hosting')), text(T('hostingHint'), 'muted')] : [text(T('inRoom', (room && room.owner) || '')), text(T('inRoomHint'), 'muted')], [
           button(T('leave'), () => sendAction('leave')),
         ])
       );

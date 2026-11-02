@@ -115,15 +115,20 @@
           joinable.map((r) => {
             let sub;
             if (!r.known) sub = T('checking');
-            else if (!r.open) sub = T('roomClosedNow');
+            else if (!r.open) sub = r.canHost ? T('roomClosedCanHost') : T('roomClosedNow');
             else sub = r.playing ? T('nowPlaying', r.playing.title || '?', r.playing.artist) : T('nobodyPlaying');
             const lines = [el('div', { class: 'name', text: T('roomOf', r.owner) }), el('div', { class: 'muted small', text: sub })];
-            const names = (r.members || []).map((m) => m.label);
+            const names = (r.members || []).map((m) => (m.host ? `${m.label} (${T('hostTag')})` : m.label));
             if (r.open && names.length) lines.push(el('div', { class: 'muted small', text: T('inRoomNow', names.join(T('sep'))) }));
             return el('div', { class: 'roomrow' + (r.open && r.playing ? ' live' : '') }, [
               el('div', { class: 'grow' }, lines),
-              r.open
-                ? el('button', { class: 'primary', text: T('join'), onclick: (e) => { e.target.disabled = true; action({ action: 'rejoin', room: r.room }); } })
+              // 開いていれば「参加する」、閉じていれば「ホストする」(だれかが先にホストしていたら、自動で参加になる)
+              r.open || r.canHost
+                ? el('button', {
+                    class: 'primary',
+                    text: r.open ? T('join') : T('host'),
+                    onclick: (e) => { e.target.disabled = true; action({ action: 'host', room: r.room }); },
+                  })
                 : null,
             ]);
           })
@@ -137,6 +142,7 @@
         el('div', { class: 'row' }, [
           el('span', { class: 'dot on' }),
           el('span', { class: 'name', text: m.id === room.you ? m.label + T('youSuffix') : m.label }),
+          m.host || m.id === room.host ? el('span', { class: 'tag', text: T('hostTag') }) : null,
           el('span', { class: 'svc', text: SERVICE_NAMES[m.service] || '' }),
         ])
       );

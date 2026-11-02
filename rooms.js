@@ -1,11 +1,13 @@
 // 曲の共有の「部屋」
 //
-// 部屋は、エージェントを動かしているPC(持ち主)ごとに1つある。中にいる人は全員が曲を変えられ、
-// 誰かが曲を選ぶ・再生・一時停止・シークすると、ほかの人のブラウザ拡張機能がそれぞれ自分の
+// 部屋には「ホスト」が1人だけいる(部屋を開いた人。ホストが出ると、残っている人に引き継ぐ)。
+// パスワードを知っている人なら、部屋が閉じている時に誰でもホストとして開ける(開いている時は参加になる)。
+// 中にいる人は全員が曲を変えられ、誰かが曲を選ぶ・再生・一時停止・シークすると、ほかの人のブラウザ拡張機能がそれぞれ自分の
 // サービス(Apple Music / Spotify / YouTube Music)で同じ状態にする。
 //
-// 入り方は4つ:
-//   - 持ち主のエージェント            … WRITE_TOKEN で部屋を開く(POST /api/room/open)
+// 入り方:
+//   - 持ち主のエージェント            … WRITE_TOKEN で部屋を開く(POST /api/room/open。ほかの人がホストなら参加)
+//   - パスワードか通行証を持っている人 … ホストとして開く/参加する(POST /api/room/host)
 //   - 友達のエージェント(Ctrl+Alt+M) … WRITE_TOKEN で参加用の鍵をもらう(POST /api/room/member-token)
 //   - Discord のリンクから来た人      … /listen/<部屋> のページでパスワードを入れる(POST /api/room/join)
 //   - 一度入ったことがある人          … 部屋の中の人から招待を受け取って入る(POST /api/room/accept-invite)
@@ -49,10 +51,6 @@ function randomToken() {
   return crypto.randomBytes(24).toString('base64url');
 }
 
-function hashPassword(password, salt) {
-  return crypto.scryptSync(String(password), salt, 32).toString('hex');
-}
-
 // 「通行証」: パスワードで一度入った人(と招待で入った人)に渡し、次からはパスワード無しで途中参加できるようにする。
 // 中継サーバーが再起動しても使えるよう、合言葉(WRITE_TOKEN など)と部屋のパスワードから作る。
 // 持ち主がパスワードを変えると、前の通行証は使えなくなる
@@ -66,10 +64,68 @@ function signPass(room, nonce) {
   return crypto.createHmac('sha256', room.passKey).update(nonce).digest('base64url');
 }
 
+// 通行証には、部屋の鍵(passKey)を暗号化したもの(k)も入れておく。中継サーバーが再起動して部屋のことを
+// 忘れても、通行証を持っている人が来れば鍵を取り戻せる(=パスワードを知っている人がホストとして開き直せる)
+const PASS_ENC_KEY = crypto.createHmac('sha256', PASS_SECRET).update('room-pass-enc').digest();
+
+function sealKey(id, passKey) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', PASS_ENC_KEY, iv);
+  c.setAAD(Buffer.from('room\n' + id));
+  const ct = Buffer.concat([c.update(passKey), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64url');
+}
+
+function openKey(id, k) {
+  try {
+    const buf = Buffer.from(String(k), 'base64url');
+    if (buf.length !== 12 + 16 + 32) return null;
+    const d = crypto.createDecipheriv('aes-256-gcm', PASS_ENC_KEY, buf.subarray(0, 12));
+    d.setAAD(Buffer.from('room\n' + id));
+    d.setAuthTag(buf.subarray(12, 28));
+    return Buffer.concat([d.update(buf.subarray(28)), d.final()]);
+  } catch (e) {
+    return null;
+  }
+}
+
 function makePass(room) {
   if (!room.passKey) return null;
   const nonce = crypto.randomBytes(12).toString('base64url');
-  return { nonce, sig: signPass(room, nonce) };
+  return { nonce, sig: signPass(room, nonce), k: sealKey(room.id, room.passKey) };
+}
+
+// 通行証の中の鍵を取り出す(本物で、署名も合っている時だけ)
+function passKeyFromPass(id, data) {
+  const p = data && data.pass;
+  if (!p || typeof p.k !== 'string' || typeof p.nonce !== 'string' || typeof p.sig !== 'string' || p.k.length > 200) return null;
+  const key = openKey(id, p.k);
+  if (!key) return null;
+  const sig = crypto.createHmac('sha256', key).update(p.nonce).digest('base64url');
+  return safeEqual(p.sig, sig) ? key : null;
+}
+
+// 通行証を確かめる。中継サーバーが部屋のことを忘れていても、通行証の中の鍵で取り戻す。
+// 返り値: { room }(通った。部屋を知らず通行証も古い形なら room は null)/ { error, status }
+function verifyPass(id, data) {
+  let room = rooms[id];
+  const fromPass = passKeyFromPass(id, data);
+  if (room && room.passKey) {
+    if (checkPass(room, data)) return { room };
+    // 鍵が違う。エージェントが決めた鍵なら、パスワードが変わったということ(通行証は使えない)。
+    // 通行証から取り戻した鍵同士が違う時は、どちらが新しいか分からないので消させない
+    if (room.passKeyFrom === 'pass' && fromPass) return { error: 'pass-conflict', status: 409 };
+    return { error: 'bad-pass', status: 403 };
+  }
+  if (!fromPass) return { room: null };
+  room = room || (rooms[id] = newRoom(id));
+  room.passKey = fromPass;
+  room.passKeyFrom = 'pass';
+  return { room };
+}
+
+function passwordMatches(room, password) {
+  return !!(room && room.passKey && password && safeEqual(room.passKey.toString('hex'), passKeyFor(room.id, password).toString('hex')));
 }
 
 function checkPass(room, data) {
@@ -103,8 +159,58 @@ function cleanLabel(v, fallback) {
   return s || fallback;
 }
 
-function isOpen(room, now) {
-  return !!room && now - room.ownerSeen <= OWNER_TIMEOUT_MS;
+// 部屋が開いている = ホストがいる
+function isOpen(room) {
+  return !!(room && room.hostToken && room.members.has(room.hostToken));
+}
+
+function hostOf(room) {
+  return room && room.hostToken ? room.members.get(room.hostToken) || null : null;
+}
+
+function newRoom(id) {
+  return {
+    id,
+    ownerPc: null,
+    ownerLabel: null, // 今(閉じていれば最後)のホストの名前
+    hostToken: null,
+    passKey: null,
+    passKeyFrom: null, // 'agent'(持ち主のエージェントが決めた) / 'pass'(通行証から取り戻した)
+    members: new Map(),
+    queue: [],
+    seq: 0,
+    waiters: [],
+    known: new Map(),
+    invites: new Map(),
+    lastState: null,
+    closedAt: Date.now(),
+  };
+}
+
+function setHost(room, member) {
+  const was = room.hostToken;
+  room.hostToken = member.token;
+  room.ownerLabel = member.label;
+  room.ownerPc = member.pc || null;
+  if (was && was !== member.token) pushMessage(room, { type: 'host', from: member.id, fromLabel: member.label, data: {} });
+}
+
+// ホストがいなくなったら、残っている人に引き継ぐ(部屋を開いておくエージェントを優先、次に早く入った人)。誰もいなければ閉じる
+function pickHost(room) {
+  if (isOpen(room)) return;
+  const list = Array.from(room.members.values()).sort(
+    (a, b) => (a.kind === 'owner' ? 0 : 1) - (b.kind === 'owner' ? 0 : 1) || a.joinedAt - b.joinedAt
+  );
+  if (list.length) {
+    room.hostToken = null;
+    setHost(room, list[0]);
+    pushMessage(room, { type: 'host', from: list[0].id, fromLabel: list[0].label, data: {} });
+  } else {
+    room.hostToken = null;
+    room.lastState = null;
+    room.queue = [];
+    room.closedAt = Date.now();
+  }
 }
 
 function memberList(room) {
@@ -113,6 +219,7 @@ function memberList(room) {
     label: m.label,
     service: m.service,
     kind: m.kind,
+    host: m.token === room.hostToken,
   }));
 }
 
@@ -202,6 +309,7 @@ function respondPoll(res, room, member, messages, sendJson) {
     members: memberList(room),
     you: member.id,
     owner: room.ownerLabel,
+    host: (hostOf(room) || {}).id || null,
     known: knownList(room),
   });
 }
@@ -222,9 +330,13 @@ function wake(room) {
 
 function addMember(room, { label, service, kind, pc, clientId }) {
   // 同じPC(エージェント)が鍵をもらい直した時は、前の鍵を消して入れ替える
+  let wasHost = false;
   if (pc || clientId) {
     for (const [token, m] of room.members) {
-      if ((pc && m.pc === pc) || (clientId && m.clientId === clientId)) room.members.delete(token);
+      if ((pc && m.pc === pc) || (clientId && m.clientId === clientId)) {
+        if (token === room.hostToken) wasHost = true;
+        room.members.delete(token);
+      }
     }
   }
   const token = randomToken();
@@ -237,8 +349,10 @@ function addMember(room, { label, service, kind, pc, clientId }) {
     pc: pc || null,
     clientId: clientId || null,
     lastSeen: Date.now(),
+    joinedAt: Date.now(),
   };
   room.members.set(token, member);
+  if (wasHost) room.hostToken = token; // ホストが鍵をもらい直した → ホストのまま
   recordKnown(room, member);
   pushMessage(room, { type: 'joined', from: member.id, fromLabel: member.label, data: { service: member.service, kind } }, member.id);
   return member;
@@ -249,6 +363,7 @@ function removeMember(room, token, reason) {
   if (!member) return;
   room.members.delete(token);
   pushMessage(room, { type: 'left', from: member.id, fromLabel: member.label, data: { reason } });
+  if (token === room.hostToken) pickHost(room);
 }
 
 // 連絡が途絶えた参加者・持ち主がいなくなった部屋を片付ける
@@ -256,12 +371,14 @@ function sweep() {
   const now = Date.now();
   for (const [id, room] of Object.entries(rooms)) {
     for (const [token, m] of room.members) {
-      if (m.kind !== 'owner' && now - m.lastSeen > MEMBER_TIMEOUT_MS) removeMember(room, token, 'timeout');
+      const limit = m.kind === 'owner' ? OWNER_TIMEOUT_MS : MEMBER_TIMEOUT_MS;
+      if (now - m.lastSeen > limit) removeMember(room, token, 'timeout');
     }
     for (const [code, inv] of room.invites) {
       if (now > inv.expires) room.invites.delete(code);
     }
-    if (!isOpen(room, now) && room.waiters.length === 0 && now - room.ownerSeen > OWNER_TIMEOUT_MS * 4) {
+    // パスワードのある部屋は、閉じても覚えておく(パスワードを知っている人が、あとでホストとして開けるように)
+    if (!isOpen(room) && !room.passKey && room.waiters.length === 0 && now - room.closedAt > OWNER_TIMEOUT_MS * 4) {
       delete rooms[id];
     }
   }
@@ -442,11 +559,13 @@ function handle(req, res, parsedUrl, ctx) {
     const id = (parsedUrl.searchParams.get('room') || '').trim();
     const room = rooms[id];
     const now = Date.now();
+    const open = isOpen(room);
     sendJson(res, 200, {
       room: id,
-      open: isOpen(room, now),
+      open,
       owner: room ? room.ownerLabel : null,
-      guestsAllowed: !!(room && room.passwordHash),
+      guestsAllowed: !!(room && room.passKey),
+      canHost: !open && !!(room && room.passKey), // 閉じているが、パスワードを入れればホストとして開ける
       extVersion: extensionVersion(),
     });
     return true;
@@ -457,7 +576,7 @@ function handle(req, res, parsedUrl, ctx) {
     const token = parsedUrl.searchParams.get('token') || '';
     const room = rooms[id];
     const member = room && room.members.get(token);
-    if (!member || !isOpen(room, Date.now())) {
+    if (!member || !isOpen(room)) {
       sendJson(res, 403, { error: 'not-member' });
       return true;
     }
@@ -502,64 +621,96 @@ function handle(req, res, parsedUrl, ctx) {
     const now = Date.now();
 
     if (action === 'open') {
+      // エージェント(config の listen_room がこの部屋のPC)。部屋が閉じていればホストになり、
+      // ほかの人がホストをしていれば、その部屋に参加する(ホストは同時に1人だけ)
       if (!isWriteAuthorized(req)) return sendJson(res, 401, { error: 'unauthorized' });
       if (!ROOM_ID_RE.test(id)) return sendJson(res, 400, { error: 'invalid room id' });
       const pc = typeof data.pc === 'string' ? data.pc.slice(0, 64) : '';
-      let room = rooms[id];
-      if (room && room.ownerPc !== pc && isOpen(room, now)) {
-        return sendJson(res, 409, { error: 'room is owned by another PC' });
-      }
-      if (!room || room.ownerPc !== pc) {
-        room = {
-          id,
-          ownerPc: pc,
-          members: new Map(),
-          queue: [],
-          seq: 0,
-          waiters: [],
-          salt: null,
-          passwordHash: null,
-          known: new Map(),
-          invites: new Map(),
-        };
-        rooms[id] = room;
-      }
-      room.ownerLabel = cleanLabel(data.label, id);
-      room.ownerSeen = now;
+      const room = rooms[id] || (rooms[id] = newRoom(id));
+      const label = cleanLabel(data.label, id);
+      let me = Array.from(room.members.values()).find((m) => m.kind === 'owner' && m.pc === pc);
+      if (!me || data.newToken) me = addMember(room, { label, service: data.service, kind: 'owner', pc });
+      me.lastSeen = now;
+      me.label = label;
+      if (SERVICES.has(data.service)) me.service = data.service;
+      if (!isOpen(room)) {
+        room.queue = [];
+        room.lastState = null;
+        setHost(room, me);
+      } else if (room.hostToken === me.token) room.ownerLabel = label;
       const password = typeof data.password === 'string' ? data.password : '';
       if (password) {
-        if (!room.salt || !room.passwordHash || !safeEqual(room.passwordHash, hashPassword(password, room.salt))) {
-          room.salt = crypto.randomBytes(16).toString('hex');
-          room.passwordHash = hashPassword(password, room.salt);
-        }
-        room.passKey = passKeyFor(id, password);
-      } else {
-        room.salt = null;
-        room.passwordHash = null;
+        room.passKey = passKeyFor(id, password); // パスワードを決めるのはエージェント(変えると古い通行証は使えなくなる)
+        room.passKeyFrom = 'agent';
+      } else if (room.hostToken === me.token) {
         room.passKey = null;
+        room.passKeyFrom = null;
       }
-      let owner = Array.from(room.members.values()).find((m) => m.kind === 'owner');
-      if (!owner || data.newToken) owner = addMember(room, { label: room.ownerLabel, service: data.service, kind: 'owner', pc });
-      owner.lastSeen = now;
-      if (SERVICES.has(data.service)) owner.service = data.service;
-      return sendJson(res, 200, { ok: true, room: id, token: owner.token, you: owner.id, members: memberList(room) });
+      return sendJson(res, 200, {
+        ok: true,
+        room: id,
+        token: me.token,
+        you: me.id,
+        host: room.hostToken === me.token,
+        owner: room.ownerLabel,
+        members: memberList(room),
+      });
     }
 
     // 通行証を持っている人が、部屋の様子(誰がいるか・何が流れているか)を見る
     if (action === 'peek') {
-      const r = rooms[id];
-      if (!r || !isOpen(r, now)) return sendJson(res, 200, { open: false });
-      if (!checkPass(r, data)) return sendJson(res, 403, { error: 'bad-pass' });
+      if (!ROOM_ID_RE.test(id)) return sendJson(res, 400, { error: 'invalid room id' });
+      const v = verifyPass(id, data);
+      if (v.error) return sendJson(res, v.status, { error: v.error });
+      const r = v.room;
+      if (!r) return sendJson(res, 200, { open: false, canHost: false });
+      if (!isOpen(r)) return sendJson(res, 200, { open: false, owner: r.ownerLabel || undefined, canHost: true });
       return sendJson(res, 200, {
         open: true,
         owner: r.ownerLabel,
-        members: memberList(r).map((m) => ({ label: m.label, service: m.service, kind: m.kind })),
+        members: memberList(r).map((m) => ({ label: m.label, service: m.service, kind: m.kind, host: m.host })),
         playing: nowPlaying(r, now),
       });
     }
 
+    // パスワードか通行証で「ホストとして開く」。もう誰かがホストをしていれば、その部屋に参加する
+    if (action === 'host') {
+      if (!ROOM_ID_RE.test(id)) return sendJson(res, 400, { error: 'invalid room id' });
+      let room;
+      const password = typeof data.password === 'string' ? data.password : '';
+      if (password) {
+        const ip = clientIp(req);
+        if (tooManyFailures(ip)) return sendJson(res, 429, { error: 'too-many-attempts' });
+        room = rooms[id];
+        if (!room || !room.passKey) return sendJson(res, 404, { error: 'unknown-room' }); // 確かめようがない
+        if (!passwordMatches(room, password)) {
+          noteFailure(ip);
+          return sendJson(res, 403, { error: 'wrong-password' });
+        }
+      } else {
+        const v = verifyPass(id, data);
+        if (v.error) return sendJson(res, v.status, { error: v.error });
+        room = v.room;
+        if (!room) return sendJson(res, 403, { error: 'bad-pass' });
+      }
+      const auth = clientAuth(data);
+      const hosting = !isOpen(room);
+      if (hosting) {
+        room.queue = [];
+        room.lastState = null;
+      }
+      const m = addMember(room, {
+        label: cleanLabel(data.label || (auth && auth.rec.label), 'guest'),
+        service: SERVICES.has(data.service) ? data.service : auth && auth.rec.service,
+        kind: 'guest',
+        clientId: auth ? auth.id : null,
+      });
+      if (hosting) setHost(room, m);
+      return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel, host: hosting, pass: makePass(room) });
+    }
+
     const room = rooms[id];
-    if (!room || !isOpen(room, now)) return sendJson(res, 404, { error: 'room is not open' });
+    if (!room || !isOpen(room)) return sendJson(res, 404, { error: 'room is not open' });
 
     // 通行証で途中参加する(パスワードを入れ直さなくてよい)
     if (action === 'rejoin') {
@@ -588,10 +739,10 @@ function handle(req, res, parsedUrl, ctx) {
 
     if (action === 'join') {
       const ip = clientIp(req);
-      if (!room.passwordHash) return sendJson(res, 403, { error: 'guests-not-allowed' });
+      if (!room.passKey) return sendJson(res, 403, { error: 'guests-not-allowed' });
       if (tooManyFailures(ip)) return sendJson(res, 429, { error: 'too-many-attempts' });
       const password = typeof data.password === 'string' ? data.password : '';
-      if (!safeEqual(room.passwordHash, hashPassword(password, room.salt))) {
+      if (!passwordMatches(room, password)) {
         noteFailure(ip);
         return sendJson(res, 403, { error: 'wrong-password' });
       }
@@ -701,17 +852,21 @@ function handle(req, res, parsedUrl, ctx) {
     }
 
     if (action === 'leave') {
+      // 部屋を開いておくエージェントは出られない(終了は end)。ホストが出ると、残っている人に引き継ぐ
       if (member.kind === 'owner') return sendJson(res, 400, { error: 'owner cannot leave; use end' });
       removeMember(room, token, 'leave');
       return sendJson(res, 200, { ok: true });
     }
 
     if (action === 'end') {
-      if (member.kind !== 'owner') return sendJson(res, 403, { error: 'only the owner can end' });
+      // 終了できるのは、ホストと、部屋を開いておくエージェント。エージェント以外の全員が部屋から出る
+      if (member.kind !== 'owner' && token !== room.hostToken) return sendJson(res, 403, { error: 'only the host can end' });
+      pushMessage(room, { type: 'ended', from: member.id, fromLabel: member.label, data: {} });
       for (const [t, m] of Array.from(room.members)) {
         if (m.kind !== 'owner') room.members.delete(t);
       }
-      pushMessage(room, { type: 'ended', from: member.id, fromLabel: member.label, data: {} });
+      wake(room);
+      pickHost(room);
       return sendJson(res, 200, { ok: true });
     }
 

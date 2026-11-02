@@ -4,7 +4,9 @@
 サービスが違っても同じ曲を同時に流す。
 
 仕組み:
-  - 中継サーバーに、このPCの「部屋」を開いておく(config の listen_room。中にいる人は全員が曲を変えられる)
+  - 中継サーバーに、このPCの「部屋」を開いておく(config の listen_room。中にいる人は全員が曲を変えられる)。
+    部屋のホストは同時に1人だけ。部屋が閉じている時はこのPCがホストになり、パスワードを知っている
+    ほかの人がすでにホストとして開いていれば、その部屋に参加する
   - 実際の同期(今の曲を読む・同じ曲を探して流す)は、ブラウザ拡張機能(extension/)が部屋の中で行う。
     このファイルは、拡張機能に「どの部屋に入るか(部屋の鍵)」を教える係
   - ショートカットキー(初期値 Ctrl+Alt+M)で友達にリクエストを送り、相手が許可すると、
@@ -107,6 +109,8 @@ class MusicSync:
         self.own_token = None  # 自分の部屋の鍵(持ち主として)
         self.own_you = None  # 自分の部屋での、自分の参加者番号
         self.own_members = []
+        self.own_host = True  # 自分の部屋のホストが自分か(ほかの人が先に開いていれば False)
+        self.own_owner = self.pc_label  # 自分の部屋のホストの名前
         self.joined = None  # 友達の部屋に入っている時 {"id", "token", "owner", "session"}
         self.joined_members = []
         self.pending_out = None  # {"id", "expires"}
@@ -414,9 +418,16 @@ class MusicSync:
             auth=True,
         )
         if result and result.get("token"):
+            host = result.get("host", True)
+            owner = result.get("owner") or self.pc_label
             with self.lock:
-                if self.own_token != result["token"]:
-                    _log(f"部屋「{self.room_id}」を開きました" + ("(パスワードで参加できます)" if self.password else ""))
+                if self.own_token != result["token"] or self.own_host != host:
+                    if host:
+                        _log(f"部屋「{self.room_id}」を開きました" + ("(パスワードで参加できます)" if self.password else ""))
+                    else:
+                        _log(f"部屋「{self.room_id}」は {owner} がホストをしているので、参加しました")
+                self.own_host = host
+                self.own_owner = owner
                 self.own_token = result["token"]
                 self.own_you = result.get("you")
                 self._update_members_locked(own=True, members=result.get("members") or [])
@@ -474,6 +485,10 @@ class MusicSync:
                     if r and r.get("members") is not None:
                         with self.lock:
                             self._update_members_locked(own=True, members=r["members"])
+                            if r.get("owner"):
+                                self.own_owner = r["owner"]  # ホストが替わった時のため
+                            if any("host" in m for m in r["members"]):
+                                self.own_host = any(m.get("host") and m.get("id") == self.own_you for m in r["members"])
                     elif r and r.get("__status") in (403, 404):
                         with self.lock:
                             self.own_token = None  # 中継サーバーが再起動した → 開き直す
@@ -510,7 +525,7 @@ class MusicSync:
             if self.joined:
                 room = {"id": self.joined["id"], "token": self.joined["token"], "role": "friend", "owner": self.joined["owner"]}
             elif self.own_token:
-                room = {"id": self.room_id, "token": self.own_token, "role": "owner", "owner": self.pc_label}
+                room = {"id": self.room_id, "token": self.own_token, "role": "owner", "owner": self.own_owner or self.pc_label}
             else:
                 room = None
             return {"room": room, "ui": self._ui_locked(), "extVersion": self.extension_version()}

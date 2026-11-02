@@ -149,7 +149,7 @@ async function acceptInvite(code) {
     guest = { relay: RELAY, room: inv.room, token: j.token, label: client.label, service: client.service, owner: j.owner };
     await chrome.storage.local.set({ guestCreds: guest });
     await savePass(inv.room, j.owner, j.pass);
-    if (!(agent.data && agent.data.room)) useCreds(currentCreds());
+    useCreds(currentCreds());
     const opened = await openServiceIfNeeded(client.service);
     updateBadge();
     return { ok: true, opened };
@@ -209,7 +209,10 @@ function updateBadge() {
 // ---------------------------------------------------------------- 通行証(途中参加)
 async function savePass(roomId, owner, pass) {
   if (!roomId || !pass || !pass.nonce || !pass.sig) return;
-  passes[roomId] = { room: roomId, owner: owner || roomId, pass: { nonce: pass.nonce, sig: pass.sig } };
+  // k は部屋の鍵を暗号化したもの(中継サーバーが再起動しても、これでホストとして開き直せる)
+  const p = { nonce: pass.nonce, sig: pass.sig };
+  if (typeof pass.k === 'string') p.k = pass.k;
+  passes[roomId] = { room: roomId, owner: owner || roomId, pass: p };
   await chrome.storage.local.set({ passes });
 }
 
@@ -247,7 +250,14 @@ async function peekRooms(force) {
           return;
         }
         if (!resp.ok) return;
-        roomStatus.set(id, { open: !!j.open, owner: j.owner || passes[id].owner, members: j.members || [], playing: j.playing || null, at: Date.now() });
+        roomStatus.set(id, {
+          open: !!j.open,
+          canHost: !j.open && j.canHost !== false,
+          owner: j.owner || passes[id].owner,
+          members: j.members || [],
+          playing: j.playing || null,
+          at: Date.now(),
+        });
         if (j.owner && passes[id].owner !== j.owner) {
           passes[id].owner = j.owner;
           await chrome.storage.local.set({ passes });
@@ -258,25 +268,30 @@ async function peekRooms(force) {
   updateBadge();
 }
 
-async function rejoinRoom(roomId) {
+// 前に入った部屋に通行証で入る。部屋が閉じていれば、自分がホストとして開く(ホストは同時に1人だけ。
+// もう誰かがホストをしていれば、その部屋に参加する)
+async function hostRoom(roomId) {
   await loadAll();
   const p = passes[roomId];
   if (!p) return { ok: false, error: 'passInvalid' };
   if (!client) await registerClient();
+  const body = {
+    room: roomId,
+    pass: p.pass,
+    label: client ? client.label : undefined,
+    service: client ? client.service : undefined,
+    client: client ? client.client : undefined,
+    key: client ? client.key : undefined,
+  };
+  const post = (action) =>
+    fetch(`${RELAY}/api/room/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   try {
-    const resp = await fetch(`${RELAY}/api/room/rejoin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        room: roomId,
-        pass: p.pass,
-        label: client ? client.label : undefined,
-        service: client ? client.service : undefined,
-        client: client ? client.client : undefined,
-        key: client ? client.key : undefined,
-      }),
-    });
-    const j = await resp.json();
+    let resp = await post('host');
+    let j = await resp.json();
+    if (resp.status === 404 && j.error === 'not found') {
+      resp = await post('rejoin'); // 中継サーバーが古い
+      j = await resp.json();
+    }
     if (!resp.ok) {
       if (j.error === 'bad-pass') {
         delete passes[roomId];
@@ -286,12 +301,16 @@ async function rejoinRoom(roomId) {
       }
       return { ok: false, error: 'joinFailedClosed' };
     }
+    if (guest && guest.room !== roomId) await leaveGuestRoom('switch');
     guest = { relay: RELAY, room: roomId, token: j.token, label: client ? client.label : 'guest', service: client ? client.service : 'apple', owner: j.owner };
     await chrome.storage.local.set({ guestCreds: guest });
-    if (!(agent.data && agent.data.room)) useCreds(currentCreds());
+    if (j.pass) await savePass(roomId, j.owner, j.pass);
+    useCreds(currentCreds());
+    if (j.host) setNotice('youHost', [], 8);
     const opened = await openServiceIfNeeded(guest.service);
+    peekAt = 0;
     updateBadge();
-    return { ok: true, opened };
+    return { ok: true, opened, host: !!j.host };
   } catch (e) {
     return { ok: false, error: 'noServer' };
   }
@@ -378,11 +397,13 @@ async function postAgent(path, body) {
 
 // ---------------------------------------------------------------- 部屋
 function currentCreds() {
-  if (agent.data && agent.data.room && agent.data.room.token) {
-    return Object.assign({ relay: RELAY, mode: 'agent' }, agent.data.room);
-  }
-  if (guest) return Object.assign({ mode: 'guest', role: 'guest', id: guest.room }, guest);
-  return null;
+  const a = agent.data && agent.data.room && agent.data.room.token ? agent.data.room : null;
+  const g = guest ? Object.assign({ mode: 'guest', role: 'guest', id: guest.room }, guest) : null;
+  // PC Status の人でも、アイコンの画面や参加ページから自分で入った・ホストした部屋があれば、そちらを使う
+  // (エージェントが友達の部屋に入っている時と、同じ部屋の時はエージェントのほう)
+  if (a && g && a.role !== 'friend' && a.id !== g.id) return g;
+  if (a) return Object.assign({ relay: RELAY, mode: 'agent' }, a);
+  return g;
 }
 
 function useCreds(creds) {
@@ -395,6 +416,7 @@ function useCreds(creds) {
   room.members = [];
   room.known = [];
   room.you = null;
+  room.host = null;
   room.connected = false;
   engine.reset();
   updateBadge();
@@ -425,6 +447,7 @@ async function pollLoop(key) {
         room.known = data.known || [];
         room.you = data.you;
         room.owner = data.owner;
+        room.host = data.host || null;
         room.since = data.seq;
         wait = 1000;
         if (before !== room.members.map((m) => m.id).join(',')) updateBadge();
@@ -453,6 +476,9 @@ function handleRoomMessage(m, serverNow) {
     setNotice('leftNotice', [m.fromLabel], 6);
   } else if (m.type === 'declined') {
     setNotice('declinedNotice', [m.fromLabel], 6);
+  } else if (m.type === 'host') {
+    if (m.from === room.you) setNotice('youHostNow', [], 8);
+    else setNotice('hostNotice', [m.fromLabel], 6);
   }
 }
 
@@ -583,7 +609,15 @@ function buildUi(isPrimary, state) {
     lang,
     mode,
     room: creds
-      ? { id: creds.id, owner: room.owner || creds.owner || null, members: room.members, known: room.known, you: room.you, role: creds.role || 'guest' }
+      ? {
+          id: creds.id,
+          owner: room.owner || creds.owner || null,
+          members: room.members,
+          known: room.known,
+          you: room.you,
+          host: room.host || null,
+          role: creds.role || 'guest',
+        }
       : null,
     connected: room.connected,
     incoming: aui.incoming || [],
@@ -612,8 +646,8 @@ async function handleAction(body) {
     if (!r.ok) setNotice(r.error, [], 8);
   } else if (action === 'decline-invite') {
     await declineInvite(body.code);
-  } else if (action === 'rejoin') {
-    const r = await rejoinRoom(body.room);
+  } else if (action === 'rejoin' || action === 'host') {
+    const r = await hostRoom(body.room);
     if (!r.ok) setNotice(r.error, [], 8);
   } else if (['request', 'cancel', 'stop', 'accept', 'decline'].includes(action) && agent.data) {
     try {
@@ -648,7 +682,7 @@ async function handleGuestJoin(creds, sender) {
       });
     } catch (e) {}
   }
-  if (!(agent.data && agent.data.room)) useCreds(currentCreds());
+  useCreds(currentCreds());
   const opened = await openServiceIfNeeded(creds.service);
   return { ok: true, opened };
 }
@@ -666,6 +700,7 @@ async function popupState() {
       owner: (st && st.owner) || p.owner,
       known: !!st,
       open: !!(st && st.open),
+      canHost: !!(st && st.canHost),
       members: st ? st.members : [],
       playing: st ? st.playing : null,
       current: !!(room.creds && room.creds.id === p.room),

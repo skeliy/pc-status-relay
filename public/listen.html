@@ -294,6 +294,10 @@
       loading: 'Loading…',
       subtitle: 'Enter the password to hear the same song at the same time. Anyone can pick the next song.',
       closed: (o) => `${o}'s room isn't open right now. Please check back later.`,
+      closedHint: 'If you’ve joined before, you can start the room yourself from the Listen Together icon in your browser.',
+      startSubtitle: 'Nobody is hosting right now. Enter the password to start the room as the host — friends can then join you.',
+      startButton: 'Start as host',
+      doneHost: 'You’re the host. Friends can join with this link.',
       noGuests: 'This room isn’t accepting link joins right now.',
       serverDown: 'Couldn’t reach the server. Wait a moment and reload the page.',
       nameLabel: 'Your name (shown to everyone)',
@@ -342,6 +346,10 @@
       loading: '読み込み中…',
       subtitle: 'パスワードを入れると、同じ曲を同時に聴けます。誰が曲を選んでも、みんなに流れます。',
       closed: (o) => `今は ${o} の部屋が開いていません。あとでもう一度開いてください。`,
+      closedHint: '前に参加したことがあれば、ブラウザの「一緒に聴く」アイコンから自分でホストとして開けます。',
+      startSubtitle: '今はだれもホストしていません。パスワードを入れると、あなたがホストとして部屋を開けます(友達はあとから入れます)。',
+      startButton: 'ホストとして開く',
+      doneHost: 'あなたがホストです。友達はこのリンクから入れます。',
       noGuests: 'この部屋は今、リンクからの参加を受け付けていません。',
       serverDown: 'サーバーに繋がりませんでした。少し待ってから再読み込みしてください。',
       nameLabel: 'あなたの名前(みんなに表示されます)',
@@ -478,16 +486,24 @@
       all.forEach((id) => show(id, id === 'doneCard'));
       $('subtitle').textContent = '';
       const s = SERVICE_NAMES[creds.service];
-      $('doneText').textContent = joined.opened ? t('doneOpened', s) : t('doneExisting', s);
+      $('doneText').textContent = (joined.opened ? t('doneOpened', s) : t('doneExisting', s)) + (creds.host ? ' ' + t('doneHost') : '');
       return;
     }
-    if (!info.open || !info.guestsAllowed) {
+    if (creds && !info.open) {
+      // 入った後に部屋が閉じた(鍵はもう使えない)→ 入り直してもらう
+      creds = null;
+      try { sessionStorage.removeItem(storeKey); } catch (e) {}
+    }
+    // 閉じていても、中継サーバーがパスワードを覚えていれば、ホストとして開ける(ホストは同時に1人だけ)
+    const starting = !info.open && !!info.canHost && !creds;
+    if (!creds && !starting && (!info.open || !info.guestsAllowed)) {
       $('subtitle').textContent = '';
-      $('closedText').textContent = !info.open ? t('closed', owner) : t('noGuests');
+      $('closedText').textContent = !info.open ? t('closed', owner) + ' ' + t('closedHint') : t('noGuests');
       all.forEach((id) => show(id, id === 'closedCard'));
       return;
     }
-    $('subtitle').textContent = t('subtitle');
+    $('subtitle').textContent = starting ? t('startSubtitle') : t('subtitle');
+    $('joinButton').textContent = starting ? t('startButton') : t('joinButton');
     // 大きな変更(先頭の数字が上がった時)だけ入れ替えが必要。細かい修正なら古い版のままでも参加できる
     const major = (v) => parseInt(String(v || '0').split('.')[0], 10) || 0;
     const outdated = !!(extVersion && info.extVersion && major(extVersion) < major(info.extVersion));
@@ -528,17 +544,21 @@
     errors.join = null;
     render();
     try {
-      const r = await fetch('/api/room/join', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room: roomId, label, service, password }),
-      });
-      const j = await r.json();
+      // 開いていれば参加、閉じていればホストとして開く(同じ入口)
+      const body = JSON.stringify({ room: roomId, label, service, password });
+      let r = await fetch('/api/room/host', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      let j = await r.json();
+      if (r.status === 404 && j.error === 'not found') {
+        r = await fetch('/api/room/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+        j = await r.json();
+      }
       if (!r.ok) {
-        const key = { 'wrong-password': 'wrongPassword', 'too-many-attempts': 'tooMany', 'guests-not-allowed': 'noGuests', 'room is not open': 'roomClosed' }[j.error];
+        const key = { 'wrong-password': 'wrongPassword', 'too-many-attempts': 'tooMany', 'guests-not-allowed': 'noGuests', 'room is not open': 'roomClosed', 'unknown-room': 'roomClosed' }[j.error];
         errors.join = key ? { key } : { key: 'joinFailed', args: [j.error || r.status] };
         return;
       }
-      creds = { relay: location.origin, room: roomId, token: j.token, label, service, owner: j.owner, pass: j.pass || null };
+      creds = { relay: location.origin, room: roomId, token: j.token, label, service, owner: j.owner, pass: j.pass || null, host: !!j.host };
+      info = Object.assign({}, info, { open: true, owner: j.owner || (info && info.owner), canHost: false }); // 今開いた/入った
       try { sessionStorage.setItem(storeKey, JSON.stringify(creds)); } catch (err) {}
       $('password').value = '';
     } catch (err) {
