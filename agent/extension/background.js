@@ -252,6 +252,20 @@ async function maybeReload(diskVersion) {
   setTimeout(() => chrome.runtime.reload(), 300);
 }
 
+// 更新係(GitHub から2時間ごとに新しい版を入れるタスク)やエージェントが、このフォルダの中身を新しくした時は、
+// 自分で読み込み直す。一緒に聴いている最中は、曲が途切れないよう、終わるまで待つ
+async function checkOwnFolder() {
+  try {
+    const resp = await fetch(chrome.runtime.getURL('manifest.json'), { cache: 'no-store' });
+    const diskVersion = (await resp.json()).version;
+    if (!diskVersion || diskVersion === MY_VERSION) return;
+    const others = room.connected ? room.members.filter((m) => m.id !== room.you).length : 0;
+    if (others > 0) return;
+    log('新しい版が入ったので読み込み直します:', MY_VERSION, '→', diskVersion);
+    await maybeReload(diskVersion);
+  } catch (e) {}
+}
+
 async function postAgent(path, body) {
   const resp = await fetch(AGENT_URL + path, {
     method: 'POST',
@@ -585,7 +599,11 @@ chrome.alarms.create('keep-offscreen', { periodInMinutes: 1 });
 // タブを閉じていない限り部屋に残れるよう、30秒ごとに「まだいる」と中継サーバーに知らせる
 chrome.alarms.create('room-keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (a) => {
-  if (a.name === 'keep-offscreen') ensureOffscreen();
+  if (a.name === 'keep-offscreen') {
+    ensureOffscreen();
+    await loadAll();
+    checkOwnFolder();
+  }
   if (a.name === 'room-keepalive') {
     await loadAll();
     const open = await chrome.tabs.query({ url: MUSIC_URL_PATTERNS });

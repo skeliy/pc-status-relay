@@ -133,6 +133,18 @@
     background: var(--bg); border: 1px solid var(--line); white-space: nowrap;
   }
   .note { color: var(--faint); font-size: 13px; margin: 14px 0 0; }
+  .note code { white-space: normal; word-break: break-all; }
+  .cmd { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 11px; background: var(--bg); border: 1px solid var(--line-strong); }
+  .cmd code { flex: 1; min-width: 0; border: 0; padding: 0; background: none; white-space: normal; word-break: break-all; font-size: 12.5px; color: var(--text); }
+  .copy { flex: none; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .copy:hover { border-color: var(--accent); }
+  .copy.done { color: var(--ok); border-color: var(--ok); }
+  details.alt { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+  details.alt summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  details.alt summary:hover { color: var(--text); }
+  details.alt[open] summary { margin-bottom: 14px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+  .hint:empty { display: none; }
 
   .who {
     display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 4px;
@@ -222,18 +234,30 @@
   <section class="card hidden" id="installCard">
     <h2 data-i18n="installTitle"></h2>
     <p class="lead" id="installReason"></p>
-    <a class="btn" href="/listen-ext.zip" download style="margin-top:0">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
-      <span data-i18n="downloadButton"></span>
-    </a>
+    <div class="cmd"><code id="installCmd"></code><button class="copy" type="button" id="copyCmd" data-i18n="copy"></button></div>
     <ol class="steps">
-      <li><span data-i18n-html="step1"></span></li>
-      <li><span data-i18n-html="step2"></span></li>
-      <li><span data-i18n-html="step3"></span></li>
-      <li><span data-i18n-html="step4"></span></li>
-      <li><span data-i18n-html="step5"></span></li>
+      <li><span data-i18n-html="cmdStep1"></span></li>
+      <li><span data-i18n-html="cmdStep2"></span></li>
+      <li><span data-i18n-html="cmdStep3"></span></li>
+      <li><span data-i18n-html="cmdStep4"></span></li>
+      <li><span data-i18n-html="cmdStep5"></span></li>
     </ol>
-    <p class="note" data-i18n-html="updateNote"></p>
+    <p class="note" data-i18n-html="autoNote"></p>
+    <details class="alt">
+      <summary data-i18n="manualTitle"></summary>
+      <a class="btn" href="/listen-ext.zip" download style="margin-top:0">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
+        <span data-i18n="downloadButton"></span>
+      </a>
+      <ol class="steps">
+        <li><span data-i18n-html="step1"></span></li>
+        <li><span data-i18n-html="step2"></span></li>
+        <li><span data-i18n-html="step3"></span></li>
+        <li><span data-i18n-html="step4"></span></li>
+        <li><span data-i18n-html="step5"></span></li>
+      </ol>
+      <p class="note" data-i18n-html="updateNote"></p>
+    </details>
   </section>
 
   <section class="card hidden" id="readyCard">
@@ -243,6 +267,7 @@
       <span class="avatar" id="readyAvatar"></span>
       <div><b id="readyName"></b><small id="readyService"></small></div>
     </div>
+    <p class="hint" id="updateHint"></p>
     <button class="btn" id="enterButton" data-i18n="enterButton"></button>
     <div class="err" id="enterError"></div>
   </section>
@@ -280,15 +305,25 @@
       joinFailed: (e) => `Couldn’t join: ${e}`,
       noServer: 'Couldn’t reach the server.',
       installTitle: 'Install the extension (one time only)',
-      installReason: 'A small browser extension keeps your music in sync. Works in Chrome, Edge and Brave.',
-      outdated: (a, b) => `Your extension is out of date (${a}). Download the new version (${b}) and replace it.`,
+      installReason: 'A small browser extension keeps your music in sync. Works in Chrome, Edge and Brave. On Windows, one command installs it and keeps it up to date.',
+      outdated: (a, b) => `Your extension (${a}) is too old to join. Install the new version (${b}) with the command below.`,
+      copy: 'Copy',
+      copied: 'Copied',
+      cmdStep1: 'Right-click the <b>Start</b> button and open <b>Terminal</b> (or <b>Windows PowerShell</b>). Paste the command above and press <b>Enter</b>.',
+      cmdStep2: 'It downloads the extension and sets up automatic updates. The folder path is copied to your clipboard.',
+      cmdStep3: 'Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>, Brave: <code>brave://extensions</code>) and turn on <b>Developer mode</b> in the top-right corner. Keep it on.',
+      cmdStep4: 'Click <b>Load unpacked</b>, paste the folder path into the box at the top of the window, and click <b>Select Folder</b>.',
+      cmdStep5: 'Pin the red headphone icon from the puzzle menu, then reload this page. You won\u2019t need the password again.',
+      autoNote: 'New versions install automatically every 2 hours. Already installed from a .zip? Remove that one on the extensions page first. To stop automatic updates later, run <code>irm ORIGIN/listen-uninstall.ps1 | iex</code>.',
+      manualTitle: 'On a Mac, or prefer not to use a command? Install from a .zip',
+      updateAvailable: (a, b) => `A newer version (${b}) is available; you have ${a}. You can still join. If you installed with the command, it updates automatically.`,
       downloadButton: 'Download extension (.zip)',
       step1: 'Right-click the downloaded <code>pcs-music-share.zip</code> and choose <b>Extract All</b>.',
       step2: 'Open <code>chrome://extensions</code> in the address bar (Edge: <code>edge://extensions</code>, Brave: <code>brave://extensions</code>).',
       step3: 'Turn on <b>Developer mode</b> in the top-right corner, and keep it on.',
       step4: 'Click <b>Load unpacked</b> and select the extracted <code>pcs-music-share</code> folder.',
       step5: 'Pin the red headphone icon from the puzzle menu, then reload this page. You won’t need the password again.',
-      updateNote: 'To update later, replace the contents of the old <code>pcs-music-share</code> folder with the new files, then press the reload button (↻) on the extension.',
+      updateNote: 'A .zip install doesn\u2019t update by itself. To update, replace the contents of the old <code>pcs-music-share</code> folder with the new files, then press the reload button (↻) on the extension.',
       readyTitle: 'You’re all set',
       readyLead: 'Join the room and open your music service.',
       enterButton: 'Join and open music',
@@ -319,15 +354,25 @@
       joinFailed: (e) => `参加できませんでした: ${e}`,
       noServer: 'サーバーに繋がりませんでした。',
       installTitle: '拡張機能を入れる(最初の1回だけ)',
-      installReason: '曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。',
-      outdated: (a, b) => `拡張機能が古い版(${a})です。新しい版(${b})をダウンロードして入れ替えてください。`,
+      installReason: '曲を同時に流すために、ブラウザの拡張機能が必要です。Chrome・Edge・Brave で使えます。Windows なら、コマンド1つで入れられて、そのあとは自動で新しい版になります。',
+      outdated: (a, b) => `拡張機能の版(${a})が古すぎて参加できません。下のコマンドで新しい版(${b})を入れてください。`,
+      copy: 'コピー',
+      copied: 'コピーしました',
+      cmdStep1: '<b>スタート</b>ボタンを右クリックして、<b>ターミナル</b>(または <b>Windows PowerShell</b>)を開きます。上のコマンドを貼り付けて <b>Enter</b> を押します。',
+      cmdStep2: '拡張機能がダウンロードされ、自動更新が設定されます。拡張機能のフォルダの場所が、クリップボードにコピーされます。',
+      cmdStep3: '<code>chrome://extensions</code> を開き(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)、右上の <b>デベロッパーモード</b> をオンにします。オンのままにしておいてください。',
+      cmdStep4: '<b>パッケージ化されていない拡張機能を読み込む</b> を押し、開いた画面の上の欄にフォルダの場所を貼り付けて、<b>フォルダーの選択</b> を押します。',
+      cmdStep5: 'パズルのマークから赤いヘッドホンのアイコンを固定して、このページを再読み込みします。パスワードを入れ直す必要はありません。',
+      autoNote: '新しい版は2時間ごとに自動で入ります。前に zip で入れた人は、先に拡張機能ページでそちらを削除してください。自動更新をやめる時は <code>irm ORIGIN/listen-uninstall.ps1 | iex</code> を実行します。',
+      manualTitle: 'Mac の人や、コマンドを使いたくない人は zip で入れる',
+      updateAvailable: (a, b) => `新しい版(${b})があります(今は ${a})。このまま参加できます。コマンドで入れた人は、自動で新しい版になります。`,
       downloadButton: '拡張機能をダウンロード(zip)',
       step1: 'ダウンロードした <code>pcs-music-share.zip</code> を右クリックして、<b>すべて展開</b> を選びます。',
       step2: 'アドレスバーに <code>chrome://extensions</code> と入力して開きます(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)。',
       step3: '右上の <b>デベロッパーモード</b> をオンにします。オンのままにしておいてください。',
       step4: '<b>パッケージ化されていない拡張機能を読み込む</b> を押して、展開してできた <code>pcs-music-share</code> フォルダを選びます。',
       step5: 'パズルのマークから赤いヘッドホンのアイコンを固定して、このページを再読み込みします。パスワードを入れ直す必要はありません。',
-      updateNote: '新しい版に入れ替える時は、古い <code>pcs-music-share</code> フォルダの中身を新しいものに置き換えてから、拡張機能ページでこの拡張機能の更新ボタン(↻)を押してください。',
+      updateNote: 'zip で入れた場合は、自動では新しくなりません。入れ替える時は、古い <code>pcs-music-share</code> フォルダの中身を新しいものに置き換えてから、拡張機能ページでこの拡張機能の更新ボタン(↻)を押してください。',
       readyTitle: '準備ができました',
       readyLead: '部屋に入って、音楽サービスを開きます。',
       enterButton: '参加して音楽サービスを開く',
@@ -378,9 +423,25 @@
     $('langLabel').textContent = lang === 'ja' ? '日本語' : 'EN';
     langMenu.querySelectorAll('[data-lang]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.lang === lang)));
     document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
-    document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); }); // 固定の文だけ(入力は入れない)
+    document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml).replace(/ORIGIN/g, location.origin); }); // 固定の文だけ(入力は入れない)
     render();
   }
+
+  // 拡張機能を入れるコマンド(Windows の PowerShell に貼り付ける)
+  const INSTALL_CMD = `irm ${location.origin}/listen-install.ps1 | iex`;
+  $('installCmd').textContent = INSTALL_CMD;
+  $('copyCmd').addEventListener('click', async () => {
+    let ok = false;
+    try { await navigator.clipboard.writeText(INSTALL_CMD); ok = true; } catch (e) {}
+    if (!ok) {
+      // クリップボードに書けない時は、コマンドを選択状態にしておく(Ctrl+C でコピーできる)
+      const range = document.createRange(); range.selectNodeContents($('installCmd'));
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      return;
+    }
+    $('copyCmd').textContent = t('copied'); $('copyCmd').classList.add('done');
+    setTimeout(() => { $('copyCmd').textContent = t('copy'); $('copyCmd').classList.remove('done'); }, 1800);
+  });
 
   function errText(e) {
     if (!e) return '';
@@ -428,7 +489,10 @@
       return;
     }
     $('subtitle').textContent = t('subtitle');
-    const outdated = extVersion && info.extVersion && versionLess(extVersion, info.extVersion);
+    // 大きな変更(先頭の数字が上がった時)だけ入れ替えが必要。細かい修正なら古い版のままでも参加できる
+    const major = (v) => parseInt(String(v || '0').split('.')[0], 10) || 0;
+    const outdated = !!(extVersion && info.extVersion && major(extVersion) < major(info.extVersion));
+    const behind = !!(extVersion && info.extVersion && versionLess(extVersion, info.extVersion));
     const needInstall = !!creds && (!extVersion || outdated);
     show('closedCard', false);
     show('joinCard', !creds);
@@ -436,6 +500,7 @@
     show('readyCard', !!creds && !!extVersion && !outdated);
     show('doneCard', false);
     $('installReason').textContent = outdated ? t('outdated', extVersion, info.extVersion) : t('installReason');
+    $('updateHint').textContent = behind && !outdated ? t('updateAvailable', extVersion, info.extVersion) : '';
     if (creds) {
       $('readyAvatar').textContent = (creds.label || '?').trim().charAt(0).toUpperCase();
       $('readyName').textContent = creds.label;

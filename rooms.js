@@ -362,6 +362,17 @@ function handle(req, res, parsedUrl, ctx) {
     return true;
   }
 
+  // 拡張機能だけの人向けの「更新係」(PowerShell に貼り付けて使う)
+  const scriptMatch = pathname.match(/^\/listen-(install|update|uninstall)\.ps1$/);
+  if (scriptMatch && req.method === 'GET') {
+    fs.readFile(path.join(__dirname, 'public', `listen-${scriptMatch[1]}.ps1`), 'utf8', (err, text) => {
+      if (err) return sendPlain(res, 404, 'not found');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(text);
+    });
+    return true;
+  }
+
   if (pathname === '/listen-ext.zip' && req.method === 'GET') {
     let buf;
     try {
