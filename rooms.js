@@ -53,6 +53,45 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(String(password), salt, 32).toString('hex');
 }
 
+// 「通行証」: パスワードで一度入った人(と招待で入った人)に渡し、次からはパスワード無しで途中参加できるようにする。
+// 中継サーバーが再起動しても使えるよう、合言葉(WRITE_TOKEN など)と部屋のパスワードから作る。
+// 持ち主がパスワードを変えると、前の通行証は使えなくなる
+const PASS_SECRET = process.env.PASS_SECRET || process.env.WRITE_TOKEN || crypto.randomBytes(32).toString('hex');
+
+function passKeyFor(id, password) {
+  return crypto.createHmac('sha256', PASS_SECRET).update('room-pass\n' + id + '\n' + password).digest();
+}
+
+function signPass(room, nonce) {
+  return crypto.createHmac('sha256', room.passKey).update(nonce).digest('base64url');
+}
+
+function makePass(room) {
+  if (!room.passKey) return null;
+  const nonce = crypto.randomBytes(12).toString('base64url');
+  return { nonce, sig: signPass(room, nonce) };
+}
+
+function checkPass(room, data) {
+  const p = data && data.pass;
+  if (!room || !room.passKey || !p || typeof p.nonce !== 'string' || typeof p.sig !== 'string') return false;
+  if (p.nonce.length > 64 || p.sig.length > 100) return false;
+  return safeEqual(p.sig, signPass(room, p.nonce));
+}
+
+// 今その部屋で流れている曲(誰かが再生中の時だけ)
+function nowPlaying(room, now) {
+  const last = room.lastState;
+  if (!last || !last.data || !last.data.song || !last.data.isPlaying) return null;
+  const from = Array.from(room.members.values()).find((m) => m.id === last.from);
+  if (!from) return null;
+  const age = (now - last.at) / 1000;
+  const duration = Number(last.data.song.duration) || 0;
+  if (age > 900) return null;
+  if (duration && (Number(last.data.position) || 0) + age > duration + 20) return null; // 曲が終わったまま次が来ていない
+  return { title: last.data.song.title || null, artist: last.data.song.artist || null, from: last.fromLabel || from.label };
+}
+
 function safeEqual(a, b) {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -493,9 +532,11 @@ function handle(req, res, parsedUrl, ctx) {
           room.salt = crypto.randomBytes(16).toString('hex');
           room.passwordHash = hashPassword(password, room.salt);
         }
+        room.passKey = passKeyFor(id, password);
       } else {
         room.salt = null;
         room.passwordHash = null;
+        room.passKey = null;
       }
       let owner = Array.from(room.members.values()).find((m) => m.kind === 'owner');
       if (!owner || data.newToken) owner = addMember(room, { label: room.ownerLabel, service: data.service, kind: 'owner', pc });
@@ -504,8 +545,35 @@ function handle(req, res, parsedUrl, ctx) {
       return sendJson(res, 200, { ok: true, room: id, token: owner.token, you: owner.id, members: memberList(room) });
     }
 
+    // 通行証を持っている人が、部屋の様子(誰がいるか・何が流れているか)を見る
+    if (action === 'peek') {
+      const r = rooms[id];
+      if (!r || !isOpen(r, now)) return sendJson(res, 200, { open: false });
+      if (!checkPass(r, data)) return sendJson(res, 403, { error: 'bad-pass' });
+      return sendJson(res, 200, {
+        open: true,
+        owner: r.ownerLabel,
+        members: memberList(r).map((m) => ({ label: m.label, service: m.service, kind: m.kind })),
+        playing: nowPlaying(r, now),
+      });
+    }
+
     const room = rooms[id];
     if (!room || !isOpen(room, now)) return sendJson(res, 404, { error: 'room is not open' });
+
+    // 通行証で途中参加する(パスワードを入れ直さなくてよい)
+    if (action === 'rejoin') {
+      if (!room.passKey) return sendJson(res, 403, { error: 'guests-not-allowed' });
+      if (!checkPass(room, data)) return sendJson(res, 403, { error: 'bad-pass' });
+      const auth = clientAuth(data);
+      const m = addMember(room, {
+        label: cleanLabel(data.label || (auth && auth.rec.label), 'guest'),
+        service: SERVICES.has(data.service) ? data.service : auth && auth.rec.service,
+        kind: 'guest',
+        clientId: auth ? auth.id : null,
+      });
+      return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel });
+    }
 
     if (action === 'member-token') {
       if (!isWriteAuthorized(req)) return sendJson(res, 401, { error: 'unauthorized' });
@@ -534,7 +602,7 @@ function handle(req, res, parsedUrl, ctx) {
         kind: 'guest',
         clientId: auth ? auth.id : null,
       });
-      return sendJson(res, 200, { ok: true, room: id, token: member.token, you: member.id, owner: room.ownerLabel });
+      return sendJson(res, 200, { ok: true, room: id, token: member.token, you: member.id, owner: room.ownerLabel, pass: makePass(room) });
     }
 
     if (action === 'accept-invite' || action === 'decline-invite') {
@@ -550,7 +618,7 @@ function handle(req, res, parsedUrl, ctx) {
         return sendJson(res, 200, { ok: true });
       }
       const m = addMember(room, { label: auth.rec.label || 'guest', service: auth.rec.service, kind: 'guest', clientId: auth.id });
-      return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel });
+      return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel, pass: makePass(room) });
     }
 
     const token = typeof data.token === 'string' ? data.token : '';

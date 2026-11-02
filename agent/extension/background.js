@@ -30,6 +30,8 @@ const tabs = new Map(); // tabId -> { at, state, lastPlaying }
 let guest = null; // 参加ページ・招待で入った部屋 { relay, room, token, label, service, owner }
 let client = null; // この拡張機能の受信箱 { client, key, label, service }
 let loaded = false;
+let passes = {}; // 部屋 -> { room, owner, pass: { nonce, sig } } … パスワードか招待で一度入った部屋の通行証(途中参加に使う)
+const roomStatus = new Map(); // 部屋 -> { open, owner, members, playing, at } … 通行証で確かめた部屋の様子
 const invites = new Map(); // 招待コード -> { room, owner, fromLabel, code, expiresAt, members }
 const agent = { data: null, okAt: 0, checkingPromise: null, retryAt: 0, failSince: 0 };
 const AGENT_GRACE_MS = 20000; // エージェントの返事が一時的に途切れても、この間は前の部屋のまま続ける
@@ -47,7 +49,8 @@ function setNotice(key, args, seconds) {
 
 async function loadAll() {
   if (loaded) return;
-  const st = await chrome.storage.local.get(['guestCreds', 'client', 'lang']);
+  const st = await chrome.storage.local.get(['guestCreds', 'client', 'lang', 'passes']);
+  passes = st.passes || {};
   lang = PcsI18n.norm(st.lang);
   guest = st.guestCreds || null;
   client = st.client || null;
@@ -145,6 +148,7 @@ async function acceptInvite(code) {
     }
     guest = { relay: RELAY, room: inv.room, token: j.token, label: client.label, service: client.service, owner: j.owner };
     await chrome.storage.local.set({ guestCreds: guest });
+    await savePass(inv.room, j.owner, j.pass);
     if (!(agent.data && agent.data.room)) useCreds(currentCreds());
     const opened = await openServiceIfNeeded(client.service);
     updateBadge();
@@ -182,6 +186,7 @@ async function openServiceIfNeeded(service) {
 // ツールバーのアイコンの印: 招待が来ていれば赤い「!」、一緒に聴いていれば人数
 function updateBadge() {
   const others = room.connected ? room.members.filter((m) => m.id !== room.you).length : 0;
+  const live = liveRooms();
   if (invites.size > 0) {
     chrome.action.setBadgeBackgroundColor({ color: '#fa2d48' });
     chrome.action.setBadgeText({ text: '!' });
@@ -190,9 +195,105 @@ function updateBadge() {
     chrome.action.setBadgeBackgroundColor({ color: '#3ecf8e' });
     chrome.action.setBadgeText({ text: String(others + 1) });
     chrome.action.setTitle({ title: L('titleListening', room.members.map((m) => m.label).join(L('sep'))) });
+  } else if (live.length) {
+    // 前に入った部屋で、今だれかが曲を流している → 押せば途中から参加できる
+    chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' });
+    chrome.action.setBadgeText({ text: '♪' });
+    chrome.action.setTitle({ title: L('titleLive', live[0].owner || live[0].room) });
   } else {
     chrome.action.setBadgeText({ text: '' });
     chrome.action.setTitle({ title: L('brand') });
+  }
+}
+
+// ---------------------------------------------------------------- 通行証(途中参加)
+async function savePass(roomId, owner, pass) {
+  if (!roomId || !pass || !pass.nonce || !pass.sig) return;
+  passes[roomId] = { room: roomId, owner: owner || roomId, pass: { nonce: pass.nonce, sig: pass.sig } };
+  await chrome.storage.local.set({ passes });
+}
+
+// 前に入った部屋が開いていて、自分以外のだれかが曲を流している(今その部屋に入っていない時だけ)
+function liveRooms() {
+  const out = [];
+  for (const [id, st] of roomStatus) {
+    if (!st.open || !st.playing) continue;
+    if (room.creds && room.creds.id === id && room.connected) continue;
+    out.push({ room: id, owner: st.owner });
+  }
+  return out;
+}
+
+let peekAt = 0;
+async function peekRooms(force) {
+  await loadAll();
+  const ids = Object.keys(passes);
+  if (!ids.length || (!force && Date.now() - peekAt < 20000)) return;
+  peekAt = Date.now();
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const resp = await fetch(`${RELAY}/api/room/peek`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room: id, pass: passes[id].pass }),
+        });
+        const j = await resp.json();
+        if (resp.status === 403 && j.error === 'bad-pass') {
+          // パスワードが変わった → この通行証はもう使えない
+          delete passes[id];
+          roomStatus.delete(id);
+          await chrome.storage.local.set({ passes });
+          return;
+        }
+        if (!resp.ok) return;
+        roomStatus.set(id, { open: !!j.open, owner: j.owner || passes[id].owner, members: j.members || [], playing: j.playing || null, at: Date.now() });
+        if (j.owner && passes[id].owner !== j.owner) {
+          passes[id].owner = j.owner;
+          await chrome.storage.local.set({ passes });
+        }
+      } catch (e) {}
+    })
+  );
+  updateBadge();
+}
+
+async function rejoinRoom(roomId) {
+  await loadAll();
+  const p = passes[roomId];
+  if (!p) return { ok: false, error: 'passInvalid' };
+  if (!client) await registerClient();
+  try {
+    const resp = await fetch(`${RELAY}/api/room/rejoin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        room: roomId,
+        pass: p.pass,
+        label: client ? client.label : undefined,
+        service: client ? client.service : undefined,
+        client: client ? client.client : undefined,
+        key: client ? client.key : undefined,
+      }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) {
+      if (j.error === 'bad-pass') {
+        delete passes[roomId];
+        roomStatus.delete(roomId);
+        await chrome.storage.local.set({ passes });
+        return { ok: false, error: 'passInvalid' };
+      }
+      return { ok: false, error: 'joinFailedClosed' };
+    }
+    guest = { relay: RELAY, room: roomId, token: j.token, label: client ? client.label : 'guest', service: client ? client.service : 'apple', owner: j.owner };
+    await chrome.storage.local.set({ guestCreds: guest });
+    if (!(agent.data && agent.data.room)) useCreds(currentCreds());
+    const opened = await openServiceIfNeeded(guest.service);
+    updateBadge();
+    return { ok: true, opened };
+  } catch (e) {
+    return { ok: false, error: 'noServer' };
   }
 }
 
@@ -359,10 +460,14 @@ function onKicked(c) {
   log('部屋から外れました');
   room.connected = false;
   if (c.mode === 'guest') {
-    guest = null;
-    chrome.storage.local.remove('guestCreds');
-    setNotice('kicked', [], 10);
-    useCreds(null);
+    // 自分で出た後(タブを閉じた・退出を押した)に届いた「もう部屋にいない」は、知らせない
+    const leftOnPurpose = !guest || guest.token !== c.token;
+    if (guest && guest.token === c.token) {
+      guest = null;
+      chrome.storage.local.remove('guestCreds');
+    }
+    if (!leftOnPurpose) setNotice('kicked', [], 10);
+    useCreds(currentCreds());
   } else {
     agent.okAt = 0; // エージェントに新しい鍵をもらい直す
     useCreds(null);
@@ -396,9 +501,18 @@ async function roomSend(type, data) {
 async function leaveGuestRoom(reason) {
   const c = room.creds;
   if (!guest) return;
-  if (c && c.mode === 'guest') await roomPost('leave', {});
+  // 先に「自分で出た」ことにしておく(出る途中に届く「もう部屋にいない」を、追い出されたと勘違いしないため)
   guest = null;
   await chrome.storage.local.remove('guestCreds');
+  if (c && c.mode === 'guest') {
+    try {
+      await fetch(`${c.relay}/api/room/leave`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: c.id, token: c.token }),
+      });
+    } catch (e) {}
+  }
   useCreds(currentCreds());
   log('部屋を出ました', reason);
 }
@@ -455,11 +569,6 @@ async function handleTick(tabId, body) {
   if (isPrimary && room.connected && state && state.available) {
     const others = room.members.length > 1;
     if (others || engine.target) commands = engine.onLocal(state, { broadcast: others });
-    // みんなのキューにある次の曲を、前もって自分のサービスで探しておく(曲が変わった時にすぐ流せるように)
-    if (others && !commands.length) {
-      const pre = engine.nextPrefetch(state);
-      if (pre) commands = [pre];
-    }
   }
   return { commands, ui: buildUi(isPrimary, state) };
 }
@@ -483,7 +592,6 @@ function buildUi(isPrimary, state) {
     hotkey: aui.hotkey || null,
     needsClick: !!(isPrimary && engine.needsClick && room.members.length > 1),
     notice: (isPrimary && engine.currentNotice()) || n,
-    queue: room.members.length > 1 ? engine.displayQueue() : [],
     loginNeeded: !!(state && state.service === 'spotify' && state.loggedIn === false && creds),
     versionMismatch: !!(a.extVersion && a.extVersion !== MY_VERSION),
   };
@@ -504,6 +612,9 @@ async function handleAction(body) {
     if (!r.ok) setNotice(r.error, [], 8);
   } else if (action === 'decline-invite') {
     await declineInvite(body.code);
+  } else if (action === 'rejoin') {
+    const r = await rejoinRoom(body.room);
+    if (!r.ok) setNotice(r.error, [], 8);
   } else if (['request', 'cancel', 'stop', 'accept', 'decline'].includes(action) && agent.data) {
     try {
       await postAgent('/ext/action', { action, sessionId: body.sessionId });
@@ -525,6 +636,7 @@ async function handleGuestJoin(creds, sender) {
   }
   guest = { relay: RELAY, room: creds.room, token: creds.token, label: creds.label, service: creds.service, owner: creds.owner };
   await chrome.storage.local.set({ guestCreds: guest });
+  await savePass(creds.room, creds.owner, creds.pass);
   // 名前とサービスを受信箱に登録し、部屋とつなげる(次からは招待で入れるように)
   await registerClient({ label: creds.label, service: creds.service });
   if (client) {
@@ -546,8 +658,22 @@ async function popupState() {
   await loadAll();
   await refreshAgent();
   const p = primaryTab();
+  await Promise.race([peekRooms(false), new Promise((r) => setTimeout(r, 1500))]);
+  const rooms = Object.values(passes).map((p) => {
+    const st = roomStatus.get(p.room) || null;
+    return {
+      room: p.room,
+      owner: (st && st.owner) || p.owner,
+      known: !!st,
+      open: !!(st && st.open),
+      members: st ? st.members : [],
+      playing: st ? st.playing : null,
+      current: !!(room.creds && room.creds.id === p.room),
+    };
+  });
   return {
     version: MY_VERSION,
+    rooms,
     client: client ? { label: client.label, service: client.service } : null,
     hasAgent: !!agent.data,
     ui: buildUi(true, p && p.state),
@@ -603,6 +729,7 @@ chrome.alarms.onAlarm.addListener(async (a) => {
     ensureOffscreen();
     await loadAll();
     checkOwnFolder();
+    peekRooms(true);
   }
   if (a.name === 'room-keepalive') {
     await loadAll();

@@ -19,6 +19,19 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const metaCache = new Map(); // 動画の番号 -> { title, artist } (調べ中は null)
   const metaStarted = new Map(); // 動画の番号 -> 調べ始めた時刻
+  const loadedIds = new Set(); // 一緒に聴くために、こちらで開いた動画(音楽のカテゴリでなくても曲として扱う)
+
+  // YouTube の動画のカテゴリ(「Music」など)。まだ分からなければ null
+  function category(p, id) {
+    try {
+      const pr = p.getPlayerResponse() || {};
+      if (!pr.videoDetails || pr.videoDetails.videoId !== id) return null;
+      const mf = (pr.microformat || {}).playerMicroformatRenderer || {};
+      return mf.category || '';
+    } catch (e) {
+      return null;
+    }
+  }
 
   function onWatchPage() {
     return location.pathname === '/watch';
@@ -66,6 +79,13 @@
     const ad = p.classList && p.classList.contains('ad-showing');
     const phase = ad ? 'ad' : { 1: 'playing', 2: 'paused', 3: 'loading', 0: 'ended', '-1': 'idle', 5: 'paused' }[state] || 'idle';
     if (!data.video_id) return { available: true, service: SERVICE, song: null, isPlaying: false, phase };
+    // 音楽ではない動画(ゲーム実況・解説など)は、曲としてみんなに送らない
+    if (!loadedIds.has(data.video_id)) {
+      const cat = category(p, data.video_id);
+      const topic = / - Topic$/i.test(String(data.author || ''));
+      if (cat === null && !topic) return { available: true, service: SERVICE, song: null, isPlaying: false, phase: 'loading' };
+      if (cat !== 'Music' && !topic) return { available: true, service: SERVICE, song: null, isPlaying: false, phase: 'idle', notMusic: true };
+    }
     fetchMeta(data.video_id);
     let meta = metaCache.get(data.video_id);
     if (!meta) {
@@ -190,6 +210,7 @@
     const list = cmd.songId ? [cmd.songId] : await candidates(cmd.desc || {});
     if (!list.length) return { ok: false, error: 'notfound', localId: before.song ? before.song.id : null };
     for (const id of list) {
+      loadedIds.add(id);
       const p = player();
       if (!p || (p.getVideoData() || {}).video_id !== id) {
         if (!navigateTo(id)) return { ok: true, resolvedId: id }; // ページを開き直す(続きは開き直した後に合わせる)

@@ -39,35 +39,8 @@
       this.notFound = null; // { localId, title } … 届いた曲が自分のサービスに無かった時
       this.notice = null; // { text, until }
       this.service = null;
-      this.queueShown = []; // 画面に出す「次の曲」(自分が流している時は自分のキュー、届いた時は相手のキュー)
-      this.remoteQueue = []; // 届いたキュー(先読みに使う)
-      this.resolveCache = new Map(); // 曲 -> 自分のサービスでの番号(先読みの結果。見つからなければ null)
-      this.prefetchAt = -1e9;
-      this.sentQueueKey = '';
-      this.lastQueueSend = -1e9;
       this.prevLocal = null; // 前回見た自分のプレイヤー { id, position, duration } (曲が最後まで行って次に変わったかを見分ける)
       this.autoHold = null; // { localId, until } 曲の終わりに勝手に始まった曲を、しばらく送らないでおく
-    }
-
-    // 次に流れる曲(最大3曲)。画面の表示用
-    displayQueue() {
-      return (this.queueShown || []).slice(0, 3).map((q) => ({ title: q.title, artist: q.artist }));
-    }
-
-    // みんなのキューにある次の曲を、前もって自分のサービスで探す指示(探してもページが動かないサービスだけ)
-    nextPrefetch(state) {
-      if (!state || !state.quietResolve || this.target) return null;
-      const t = this.clock();
-      if (t - this.prefetchAt < 4) return null;
-      for (const item of (this.remoteQueue || []).slice(0, 3)) {
-        if (item.ids && item.ids[this.service]) continue;
-        const key = descKey(item);
-        if (this.resolveCache.has(key)) continue;
-        this.prefetchAt = t;
-        this.resolveCache.set(key, undefined); // 探し中
-        return this._cmd('resolve', { desc: item });
-      }
-      return null;
     }
 
     _expected(snap, t) {
@@ -100,9 +73,6 @@
       let position = Number(data.position) || 0;
       if (playing) position += (ageSec || 0) + LATENCY_COMP_SEC;
       let ownId = this.service && song.ids ? song.ids[this.service] || null : null;
-      if (!ownId && this.resolveCache.get(descKey(song))) ownId = this.resolveCache.get(descKey(song)); // 先読みで見つけてあった
-      this.remoteQueue = Array.isArray(data.queue) ? data.queue.slice(0, 5) : [];
-      this.queueShown = this.remoteQueue;
       const snap = { desc: song, ownId, playing, position, at: t, mine: false };
       // 同じ曲の情報なら、こちらで見つけた番号を引き継ぐ
       if (!snap.ownId && this.shared && sameDesc(this.shared.desc, song)) snap.ownId = this.shared.ownId;
@@ -119,10 +89,6 @@
       const cmd = this.pending[result.id];
       delete this.pending[result.id];
       if (!cmd) return;
-      if (cmd.action === 'resolve') {
-        this.resolveCache.set(descKey(cmd.desc), result.ok ? result.resolvedId || null : null);
-        return;
-      }
       if (result.ok) {
         if (cmd.action === 'load' && result.resolvedId) {
           if (this.target && sameDesc(this.target.desc, cmd.desc)) this.target.ownId = result.resolvedId;
@@ -240,18 +206,8 @@
       const position = Number(st.position) || 0;
       this.shared = { desc, ownId: song.id, playing: !!st.isPlaying, position, at: t, mine: true };
       this.autoHold = null;
-      const queue = (Array.isArray(st.queue) ? st.queue : []).slice(0, 5).map((q) => ({
-        title: q.title || null,
-        artist: q.artist || null,
-        duration: Number(q.duration) || null,
-        isrc: q.isrc || null,
-        ids: q.ids || {},
-      }));
-      this.queueShown = queue;
-      this.sentQueueKey = queueKey(queue);
-      this.lastQueueSend = t;
-      this.log(`送る: ${desc.title} (${st.isPlaying ? '再生' : '一時停止'} ${position.toFixed(1)}秒、次 ${queue.length}曲)`);
-      this.send({ song: desc, isPlaying: !!st.isPlaying, position: Math.round(position * 100) / 100, queue });
+      this.log(`送る: ${desc.title} (${st.isPlaying ? '再生' : '一時停止'} ${position.toFixed(1)}秒)`);
+      this.send({ song: desc, isPlaying: !!st.isPlaying, position: Math.round(position * 100) / 100 });
     }
 
     // だれかが新しく部屋に入ってきた時: 今流れていれば、その人にも流すために送り直す
@@ -275,25 +231,12 @@
       if (!sh || song.id !== sh.ownId) {
         if (!(playing && st.phase === PLAYING)) return;
         // 曲が最後まで流れて、自分のプレイヤーが勝手に次の曲(キューの次・おすすめの自動再生)を始めた時。
-        // その曲を選んで流していたのが自分でなければ、みんなに送らない(送ると、流していた人のキューから外れてしまう)。
-        // 共有されているキューの次の曲を流すか、流していた人から次の曲が届くのを待つ
+        // その曲を選んで流していたのが自分でなければ、みんなに送らない(送ると、流していた人の次の曲から外れてしまう)。
+        // 流していた人から次の曲が届くのを待つ
         if (this.autoHold && this.autoHold.localId === song.id) {
           if (t < this.autoHold.until) return;
           this.autoHold = null; // しばらく待っても誰からも来なかった → この曲をみんなに送る
         } else if (sh && !sh.mine && this._autoAdvanced(sh, st)) {
-          const next = (this.remoteQueue || [])[0];
-          if (next) {
-            let ownId = next.ids && this.service ? next.ids[this.service] || null : null;
-            if (!ownId && this.resolveCache.get(descKey(next))) ownId = this.resolveCache.get(descKey(next));
-            this.log(`曲が終わった → みんなのキューの次の曲: ${next.title}`);
-            this.remoteQueue = this.remoteQueue.slice(1);
-            this.queueShown = this.remoteQueue;
-            const snap = { desc: next, ownId, playing: true, position: 0, at: t, mine: false };
-            this.shared = snap;
-            this.target = Object.assign({}, snap, { deadline: t + 25, from: null });
-            this.lastCmd = {};
-            return this._converge(st, t);
-          }
           this.log('曲が終わった → 流していた人から次の曲が届くのを待つ');
           this.autoHold = { localId: song.id, until: t + AUTO_HOLD_SEC };
           return;
@@ -314,11 +257,6 @@
       }
       if (Math.abs(position - this._expected(sh, t)) > 3.0) {
         this._broadcast(st, t); // シークした
-        return;
-      }
-      // 同じ曲のままキューだけ変わった(次の曲を足した・並べ替えた) → みんなのキューも更新する
-      if (playing && Array.isArray(st.queue) && queueKey(st.queue) !== this.sentQueueKey && t - this.lastQueueSend > 3) {
-        this._broadcast(st, t);
       }
     }
   }
@@ -329,15 +267,6 @@
       .toLowerCase()
       .replace(/\s+/g, ' ')
       .trim();
-  }
-
-  function descKey(d) {
-    if (!d) return '';
-    return d.isrc || `${norm(d.title)}|${norm(d.artist)}`;
-  }
-
-  function queueKey(q) {
-    return (q || []).slice(0, 5).map(descKey).join('/');
   }
 
   function sameDesc(a, b) {

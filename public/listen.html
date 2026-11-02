@@ -538,7 +538,7 @@
         errors.join = key ? { key } : { key: 'joinFailed', args: [j.error || r.status] };
         return;
       }
-      creds = { relay: location.origin, room: roomId, token: j.token, label, service, owner: j.owner };
+      creds = { relay: location.origin, room: roomId, token: j.token, label, service, owner: j.owner, pass: j.pass || null };
       try { sessionStorage.setItem(storeKey, JSON.stringify(creds)); } catch (err) {}
       $('password').value = '';
     } catch (err) {

@@ -93,6 +93,15 @@
       .fab { width: 34px; height: 34px; border-radius: 50%; padding: 0; background: rgba(32,34,44,.85); border: 1px solid rgba(255,255,255,.15);
              font-size: 16px; opacity: .55; transition: opacity .15s; }
       .fab:hover { opacity: 1; }
+      .card { background: rgba(32,34,44,.95); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 12px;
+              box-shadow: 0 6px 24px rgba(0,0,0,.35); width: 230px; }
+      .head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+      .head .title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .person { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+      .person svg { flex: none; width: 18px; height: 18px; color: #b9bccb; }
+      .person.me svg { color: #fa2d48; }
+      .pname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .psvc { color: #8f93a6; font-size: 11px; white-space: nowrap; }
     </style>
     <div class="wrap"></div>`;
   const wrap = root.querySelector('.wrap');
@@ -111,6 +120,22 @@
   const text = (t, cls) => el('div', cls ? { class: cls, text: t } : { text: t });
   const pill = (lines, buttons) => el('div', { class: 'pill' }, [el('div', { class: 'text' }, lines), ...(buttons || [])]);
   const button = (label, onclick, primary) => el('button', primary ? { class: 'primary', text: label, onclick } : { text: label, onclick });
+  // 人のアイコン
+  function personIcon() {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'currentColor');
+    const head = document.createElementNS(NS, 'circle');
+    head.setAttribute('cx', '12');
+    head.setAttribute('cy', '8');
+    head.setAttribute('r', '4');
+    const body = document.createElementNS(NS, 'path');
+    body.setAttribute('d', 'M4 20.5c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5c0 .3-.2.5-.5.5h-15c-.3 0-.5-.2-.5-.5z');
+    svg.appendChild(head);
+    svg.appendChild(body);
+    return svg;
+  }
 
   function render(ui) {
     const key = JSON.stringify(ui);
@@ -161,15 +186,23 @@
     if (room && !ui.connected) {
       wrap.appendChild(pill([text(T('connecting'), 'muted')]));
     } else if (room && others.length > 0) {
-      // 誰が参加しているかを、自分も含めて全員並べる
-      const names = members.map((m) => person(m.id === room.you ? T('you') : m.label, m.service)).join(T('sep'));
+      // 誰が参加しているかを、自分も含めて1人ずつ(人のアイコンと名前)並べる
       const leaveLabel = room.role === 'owner' ? T('end') : T('leave');
-      const lines = [text(T('listeningCount', members.length)), text(T('participants', names), 'muted')];
-      if ((ui.queue || []).length) {
-        lines.push(text(T('next') + ui.queue.map((q) => q.title).join(' → '), 'muted'));
-      }
-      lines.push(text(room.role === 'owner' ? T('ownerHint') : T('guestHint'), 'muted'));
-      wrap.appendChild(pill(lines, [button(leaveLabel, () => sendAction(ui.mode === 'guest' ? 'leave' : 'stop'))]));
+      wrap.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'head', title: room.role === 'owner' ? T('ownerHint') : T('guestHint') }, [
+            el('span', { class: 'title', text: '🎧 ' + T('listeningHeader', members.length) }),
+            button(leaveLabel, () => sendAction(ui.mode === 'guest' ? 'leave' : 'stop')),
+          ]),
+          ...members.map((m) =>
+            el('div', { class: 'person' + (m.id === room.you ? ' me' : '') }, [
+              personIcon(),
+              el('span', { class: 'pname', text: m.id === room.you ? m.label + T('youSuffix') : m.label }),
+              el('span', { class: 'psvc', text: SERVICE_NAMES[m.service] || '' }),
+            ])
+          ),
+        ])
+      );
     } else if (ui.pending) {
       wrap.appendChild(
         pill([text(T('requesting')), text(T('waitingApproval'), 'muted')], [button(T('cancel'), () => sendAction('cancel'))])

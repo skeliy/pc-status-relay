@@ -106,6 +106,31 @@
       app.appendChild(section(T('invitesTitle'), list));
     }
 
+    // 前に入った部屋(通行証がある部屋)。開いていれば「参加する」で途中から入れる
+    const joinable = (data.rooms || []).filter((r) => !(room && r.current));
+    if (joinable.length) {
+      app.appendChild(
+        section(
+          T('roomsTitle'),
+          joinable.map((r) => {
+            let sub;
+            if (!r.known) sub = T('checking');
+            else if (!r.open) sub = T('roomClosedNow');
+            else sub = r.playing ? T('nowPlaying', r.playing.title || '?', r.playing.artist) : T('nobodyPlaying');
+            const lines = [el('div', { class: 'name', text: T('roomOf', r.owner) }), el('div', { class: 'muted small', text: sub })];
+            const names = (r.members || []).map((m) => m.label);
+            if (r.open && names.length) lines.push(el('div', { class: 'muted small', text: T('inRoomNow', names.join(T('sep'))) }));
+            return el('div', { class: 'roomrow' + (r.open && r.playing ? ' live' : '') }, [
+              el('div', { class: 'grow' }, lines),
+              r.open
+                ? el('button', { class: 'primary', text: T('join'), onclick: (e) => { e.target.disabled = true; action({ action: 'rejoin', room: r.room }); } })
+                : null,
+            ]);
+          })
+        )
+      );
+    }
+
     // 今一緒に聴いている人
     if (room) {
       const rows = (room.members || []).map((m) =>
@@ -127,9 +152,6 @@
           buttons.length ? el('div', { class: 'row' }, buttons) : null,
         ])
       );
-      if (ui.queue && ui.queue.length) {
-        app.appendChild(section(T('upNext'), [el('ol', {}, ui.queue.map((q) => el('li', { text: `${q.title}${q.artist ? ' / ' + q.artist : ''}` })))]));
-      }
       // 前に参加した人(今いない人)に、1人ずつ招待を送る
       const known = room.known || [];
       if (known.length) {
@@ -147,7 +169,7 @@
           )
         );
       }
-    } else if (!ui.invites.length) {
+    } else if (!ui.invites.length && !joinable.length) {
       app.appendChild(
         section(null, [
           el('div', {
