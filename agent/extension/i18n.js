@@ -68,6 +68,7 @@
       joinFailedClosed: 'Couldn’t join (the room may be closed).',
       noServer: 'Couldn’t reach the server.',
       skipped: (t) => `Couldn’t find “${t || 'this song'}”, so it was skipped.`,
+      playFailed: (t, e) => `Couldn’t play “${t || 'this song'}” (${e}).`,
       // 通知・アイコンの説明
       notifyMessage: (f, o) => `${f} invited you to listen together (${o}'s room)`,
       titleInvite: 'You have a Listen Together invite (click to join)',
@@ -136,6 +137,7 @@
       joinFailedClosed: '参加できませんでした(部屋が閉じている可能性があります)。',
       noServer: 'サーバーに繋がりませんでした。',
       skipped: (t) => `「${t || 'この曲'}」が見つからなかったので、この曲はスキップします。`,
+      playFailed: (t, e) => `「${t || 'この曲'}」を流せませんでした(${e})。`,
       notifyMessage: (f, o) => `${f} から「一緒に聴く」の招待が届きました(${o} の部屋)`,
       titleInvite: '「一緒に聴く」の招待が届いています(押すと参加できます)',
       titleListening: (names) => `一緒に聴いています: ${names}`,

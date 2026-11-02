@@ -15,6 +15,13 @@
   const M = () => window.__pcsMatch;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const isrcCache = new Map(); // カタログ番号 -> ISRC(調べ中は null)
+  const availCache = new Map(); // カタログ番号 -> この国のストアで流せるか(true/false)
+  const libCache = new Map(); // ライブラリの番号 i.xxx -> カタログの番号(調べ中は null、無ければ '')
+
+  // 約束(Promise)が返ってこない時のために、時間で区切る
+  function withTimeout(promise, ms) {
+    return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('__timeout'), ms))]);
+  }
 
   function music() {
     try {
@@ -52,7 +59,9 @@
       }
     }
     if (kind !== 'song' && kind !== 'musicVideo') id = null;
-    return { id, kind, isrc: attrs.isrc || null };
+    // ライブラリの曲(i.xxx)でカタログの番号が付いていない時は、あとでカタログの番号を調べる
+    const libId = [pp.id, item.id].find((c) => c && /^i\./.test(String(c))) || null;
+    return { id, kind, isrc: attrs.isrc || null, libId };
   }
 
   function lookupIsrc(id) {
@@ -67,6 +76,33 @@
       .catch(() => {});
   }
 
+  function lookupLibrary(libId) {
+    if (libCache.has(libId)) return;
+    libCache.set(libId, null);
+    api(`/v1/me/library/songs/${libId}/catalog`)
+      .then((d) => {
+        const song = d && d.data && d.data[0];
+        libCache.set(libId, song && /^\d+$/.test(String(song.id)) ? String(song.id) : '');
+        if (song && song.attributes && song.attributes.isrc) isrcCache.set(String(song.id), song.attributes.isrc);
+      })
+      .catch(() => libCache.set(libId, ''));
+  }
+
+  // 届いた番号が、この国の Apple Music で流せる曲か(国によって配信されていない曲がある)
+  async function available(id) {
+    if (availCache.has(id)) return availCache.get(id);
+    let ok = false;
+    try {
+      const d = await api(`/v1/catalog/${storefront(music())}/songs/${id}`);
+      const song = d && d.data && d.data[0];
+      ok = !!(song && song.attributes && song.attributes.playParams);
+    } catch (e) {
+      ok = false;
+    }
+    availCache.set(id, ok);
+    return ok;
+  }
+
   function readState() {
     const m = music();
     if (!m) return { available: false, service: SERVICE };
@@ -76,7 +112,18 @@
     if (!item) return { available: true, service: SERVICE, song: null, isPlaying: false, phase };
     const attrs = item.attributes || {};
     const info = catalogInfo(item);
-    if (info.id && !info.isrc) lookupIsrc(info.id);
+    let localOnly = false;
+    if (!info.id && info.libId) {
+      lookupLibrary(info.libId);
+      const cat = libCache.get(info.libId);
+      if (cat) info.id = cat;
+      else {
+        // カタログに無い曲(自分で取り込んだ曲など)は、曲名とアーティストで相手に探してもらう
+        info.id = info.libId;
+        localOnly = true;
+      }
+    }
+    if (info.id && !localOnly && !info.isrc) lookupIsrc(info.id);
     return {
       available: true,
       service: SERVICE,
@@ -85,12 +132,13 @@
       song: info.id
         ? {
             id: info.id,
+            localOnly, // true の時、この番号は自分のライブラリでしか通じないので相手に送らない
             kind: info.kind,
             title: item.title || attrs.name || null,
             artist: item.artistName || attrs.artistName || null,
             album: item.albumName || attrs.albumName || null,
             duration: m.currentPlaybackDuration || (attrs.durationInMillis ? attrs.durationInMillis / 1000 : 0),
-            isrc: info.isrc || isrcCache.get(info.id) || null,
+            isrc: info.isrc || (localOnly ? null : isrcCache.get(info.id)) || null,
           }
         : null,
       isPlaying: !!m.isPlaying,
@@ -127,7 +175,8 @@
   }
 
   async function resolve(desc) {
-    if (desc.ids && desc.ids.apple) return desc.ids.apple;
+    // 相手の Apple Music の番号があっても、この国のストアに無ければ曲名などで探し直す
+    if (desc.ids && desc.ids.apple && (await available(desc.ids.apple))) return desc.ids.apple;
     const m = music();
     const sf = storefront(m);
     if (desc.isrc) {
@@ -168,26 +217,31 @@
     if (!m) return { ok: false, error: 'MusicKit が見つかりません' };
     if (cmd.action === 'load') {
       const before = readState();
-      const id = cmd.songId || (await resolve(cmd.desc || {}));
+      let id = cmd.songId && (await available(cmd.songId)) ? cmd.songId : await resolve(cmd.desc || {});
       if (!id) return { ok: false, error: 'notfound', localId: before.song ? before.song.id : null };
       const kind = cmd.desc && cmd.desc.kind === 'musicVideo' ? 'musicVideo' : 'song';
-      await m.setQueue({ [kind]: id });
+      const r = await withTimeout(m.setQueue({ [kind]: id }), 8000);
+      if (r === '__timeout') return { ok: false, error: 'setQueue timeout' };
       if (cmd.play) {
-        await m.play();
-        // 再生が始まってから位置を合わせる(始まる前のシークは無視されることがあるため)
-        for (let i = 0; i < 20 && !m.isPlaying; i++) await sleep(100);
+        // play() が返ってこないことがある(自動再生を止められた時など)ので、時間で区切って確かめる
+        await withTimeout(m.play(), 4000);
+        for (let i = 0; i < 30 && !m.isPlaying; i++) await sleep(100);
+        if (!m.isPlaying) return { ok: false, error: 'autoplay', resolvedId: id };
       }
       const pos = adjusted(cmd);
-      if (pos > 1) await m.seekToTime(pos);
+      if (pos > 1) await withTimeout(m.seekToTime(pos), 4000);
       return { ok: true, resolvedId: id };
     }
     if (cmd.action === 'resolve') {
       const id = await resolve(cmd.desc || {});
       return id ? { ok: true, resolvedId: id } : { ok: false, error: 'notfound' };
     }
-    if (cmd.action === 'seek') await m.seekToTime(adjusted(cmd));
-    else if (cmd.action === 'play') await m.play();
-    else if (cmd.action === 'pause') await m.pause();
+    if (cmd.action === 'seek') await withTimeout(m.seekToTime(adjusted(cmd)), 4000);
+    else if (cmd.action === 'play') {
+      await withTimeout(m.play(), 4000);
+      for (let i = 0; i < 20 && !m.isPlaying; i++) await sleep(100);
+      if (!m.isPlaying) return { ok: false, error: 'autoplay' };
+    } else if (cmd.action === 'pause') await withTimeout(m.pause(), 4000);
     return { ok: true };
   }
 

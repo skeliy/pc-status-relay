@@ -130,6 +130,11 @@
       }
       if (result.error === 'autoplay') {
         this.needsClick = true;
+        if (cmd.action === 'load' && result.resolvedId) {
+          // 曲は入れられた(あとは再生ボタンを押すだけ)。同じ曲を何度も入れ直さないよう、番号を覚えておく
+          if (this.target && sameDesc(this.target.desc, cmd.desc)) this.target.ownId = result.resolvedId;
+          if (this.shared && sameDesc(this.shared.desc, cmd.desc)) this.shared.ownId = result.resolvedId;
+        }
         return;
       }
       if (cmd.action === 'load' && result.error === 'notfound') {
@@ -141,6 +146,10 @@
         return;
       }
       this.log(`指示が失敗: ${cmd.action} ${result.error}`);
+      if (cmd.action === 'load') {
+        // 何が起きたか分かるように、画面にも出す
+        this._setNotice({ key: 'playFailed', args: [(cmd.desc && cmd.desc.title) || null, String(result.error || '')] }, 12);
+      }
     }
 
     // 自分のプレイヤーの今の状態(0.5秒ごと)。返り値はプレイヤーへの指示の配列
@@ -210,7 +219,8 @@
         album: song.album || null,
         duration: Number(song.duration) || (sameAsShared ? this.shared.desc.duration : null) || null,
         isrc: song.isrc || (sameAsShared ? this.shared.desc.isrc : null) || null,
-        ids: Object.assign({}, baseIds, { [st.service]: song.id }),
+        // localOnly: 自分のライブラリでしか通じない番号(相手には送らず、曲名などで探してもらう)
+        ids: song.localOnly ? Object.assign({}, baseIds) : Object.assign({}, baseIds, { [st.service]: song.id }),
       };
       const position = Number(st.position) || 0;
       this.shared = { desc, ownId: song.id, playing: !!st.isPlaying, position, at: t };
