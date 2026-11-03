@@ -141,6 +141,14 @@
   .copy { flex: none; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
   .copy:hover { border-color: var(--accent); }
   .copy.done { color: var(--ok); border-color: var(--ok); }
+  .os-tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 18px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+  .os-tabs button {
+    flex: 1; height: 34px; border: 0; border-radius: 9px; background: none; color: var(--muted);
+    font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .os-tabs button:hover { color: var(--text); }
+  .os-tabs button[aria-selected="true"] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .os-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   details.alt { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
   details.alt summary { cursor: pointer; color: var(--muted); font-size: 14px; }
   details.alt summary:hover { color: var(--text); }
@@ -236,6 +244,10 @@
   <section class="card hidden" id="installCard">
     <h2 data-i18n="installTitle"></h2>
     <p class="lead" id="installReason"></p>
+    <div class="os-tabs" role="tablist" aria-label="OS">
+      <button type="button" role="tab" data-os="win" aria-selected="true">Windows</button>
+      <button type="button" role="tab" data-os="mac" aria-selected="false">Mac</button>
+    </div>
     <ol class="steps">
       <li><div class="grow"><span data-i18n-html="cmdStep1"></span>
         <div class="cmd"><code id="installCmd"></code><button class="copy" type="button" id="copyCmd" data-i18n="copy"></button></div></div></li>
@@ -319,10 +331,14 @@
       cmdStep3: 'Open <code>chrome://extensions</code> and turn on <b>Developer mode</b> (top right). Click <b>Load unpacked</b>, press <b>Ctrl+V</b>, then click <b>Select Folder</b>.',
       cmdStep4: 'Reload this page.',
       autoNote: 'It updates itself automatically. If you installed it from a .zip before, remove that one first. To uninstall: <code>irm ORIGIN/listen-uninstall.ps1 | iex</code>',
-      manualTitle: 'On a Mac, or prefer not to use a command? Install from a .zip',
+      cmdStep2Mac: 'Press <b>Cmd+Space</b>, type <b>Terminal</b> and press <b>Return</b>. In the window that opens, press <b>Cmd+V</b>, then <b>Return</b>. Wait until it says <b>Done!</b>',
+      cmdStep3Mac: 'Open <code>chrome://extensions</code> and turn on <b>Developer mode</b> (top right). Click <b>Load unpacked</b>, press <b>Cmd+Shift+G</b>, then <b>Cmd+V</b> and <b>Return</b>, and click <b>Select</b>.',
+      autoNoteMac: 'It updates itself automatically. If you installed it from a .zip before, remove that one first. To uninstall: <code>curl -fsSL ORIGIN/listen-uninstall.sh | bash</code>',
+      manualTitle: 'Prefer not to use a command? Install from a .zip',
       updateAvailable: (a, b) => `A newer version (${b}) is available; you have ${a}. You can still join. If you installed with the command, it updates automatically.`,
       downloadButton: 'Download extension (.zip)',
       step1: 'Right-click the downloaded <code>pcs-music-share.zip</code> and choose <b>Extract All</b>.',
+      step1Mac: 'Double-click the downloaded <code>pcs-music-share.zip</code> in Downloads to unzip it.',
       step2: 'Open <code>chrome://extensions</code> in the address bar (Edge: <code>edge://extensions</code>, Brave: <code>brave://extensions</code>).',
       step3: 'Turn on <b>Developer mode</b> in the top-right corner, and keep it on.',
       step4: 'Click <b>Load unpacked</b> and select the extracted <code>pcs-music-share</code> folder.',
@@ -371,10 +387,14 @@
       cmdStep3: '<code>chrome://extensions</code> を開いて、右上の<b>デベロッパーモード</b>をオンにします。<b>パッケージ化されていない拡張機能を読み込む</b>を押し、<b>Ctrl+V</b> を押してから<b>フォルダーの選択</b>を押します。',
       cmdStep4: 'このページを再読み込みします。',
       autoNote: '新しい版は自動で入ります。前に zip で入れた人は、先にそちらを削除してください。やめる時は <code>irm ORIGIN/listen-uninstall.ps1 | iex</code> を実行します。',
-      manualTitle: 'Mac の人や、コマンドを使いたくない人は zip で入れる',
+      cmdStep2Mac: '<b>Cmd+Space</b> を押して <b>ターミナル</b>(Terminal)と入力し、<b>Return</b> を押します。開いた画面で <b>Cmd+V</b> を押してから <b>Return</b> を押し、<b>完了しました</b>と出るまで待ちます。',
+      cmdStep3Mac: '<code>chrome://extensions</code> を開いて、右上の<b>デベロッパーモード</b>をオンにします。<b>パッケージ化されていない拡張機能を読み込む</b>を押し、<b>Cmd+Shift+G</b> を押してから <b>Cmd+V</b> と <b>Return</b> を押し、<b>選択</b>を押します。',
+      autoNoteMac: '新しい版は自動で入ります。前に zip で入れた人は、先にそちらを削除してください。やめる時は <code>curl -fsSL ORIGIN/listen-uninstall.sh | bash</code> を実行します。',
+      manualTitle: 'コマンドを使いたくない人は zip で入れる',
       updateAvailable: (a, b) => `新しい版(${b})があります(今は ${a})。このまま参加できます。コマンドで入れた人は、自動で新しい版になります。`,
       downloadButton: '拡張機能をダウンロード(zip)',
       step1: 'ダウンロードした <code>pcs-music-share.zip</code> を右クリックして、<b>すべて展開</b> を選びます。',
+      step1Mac: 'ダウンロードフォルダの <code>pcs-music-share.zip</code> をダブルクリックして展開します。',
       step2: 'アドレスバーに <code>chrome://extensions</code> と入力して開きます(Edge は <code>edge://extensions</code>、Brave は <code>brave://extensions</code>)。',
       step3: '右上の <b>デベロッパーモード</b> をオンにします。オンのままにしておいてください。',
       step4: '<b>パッケージ化されていない拡張機能を読み込む</b> を押して、展開してできた <code>pcs-music-share</code> フォルダを選びます。',
@@ -394,6 +414,7 @@
   };
   const LANG_KEY = 'pcs-listen-lang';
   let lang = 'en';
+  let os = 'win'; // 入れ方のタブ(初めは Windows)
   try { if (localStorage.getItem(LANG_KEY) === 'ja') lang = 'ja'; } catch (e) {}
   const t = (key, ...args) => { const v = T[lang][key]; return typeof v === 'function' ? v(...args) : v; };
 
@@ -430,16 +451,28 @@
     $('langLabel').textContent = lang === 'ja' ? '日本語' : 'EN';
     langMenu.querySelectorAll('[data-lang]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.lang === lang)));
     document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
-    document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml).replace(/ORIGIN/g, location.origin); }); // 固定の文だけ(入力は入れない)
+    // Windows と Mac で違う手順は、Mac の時だけ「〜Mac」の文を使う
+    const osKey = (k) => (os === 'mac' && T[lang][k + 'Mac'] ? k + 'Mac' : k);
+    document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(osKey(el.dataset.i18nHtml)).replace(/ORIGIN/g, location.origin); }); // 固定の文だけ(入力は入れない)
     render();
   }
 
-  // 拡張機能を入れるコマンド(Windows の PowerShell に貼り付ける)
-  const INSTALL_CMD = `irm ${location.origin}/listen-install.ps1 | iex`;
-  $('installCmd').textContent = INSTALL_CMD;
+  // 拡張機能を入れるコマンド(Windows は PowerShell、Mac はターミナルに貼り付ける)。初めは Windows
+  const INSTALL_CMDS = {
+    win: `irm ${location.origin}/listen-install.ps1 | iex`,
+    mac: `curl -fsSL ${location.origin}/listen-install.sh | bash`,
+  };
+  function setOs(next) {
+    os = next === 'mac' ? 'mac' : 'win';
+    document.querySelectorAll('.os-tabs [data-os]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.os === os)));
+    $('installCmd').textContent = INSTALL_CMDS[os];
+    applyLang();
+  }
+  document.querySelectorAll('.os-tabs [data-os]').forEach((b) => b.addEventListener('click', () => setOs(b.dataset.os)));
+  $('installCmd').textContent = INSTALL_CMDS[os];
   $('copyCmd').addEventListener('click', async () => {
     let ok = false;
-    try { await navigator.clipboard.writeText(INSTALL_CMD); ok = true; } catch (e) {}
+    try { await navigator.clipboard.writeText(INSTALL_CMDS[os]); ok = true; } catch (e) {}
     if (!ok) {
       // クリップボードに書けない時は、コマンドを選択状態にしておく(Ctrl+C でコピーできる)
       const range = document.createRange(); range.selectNodeContents($('installCmd'));
