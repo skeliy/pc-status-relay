@@ -15,6 +15,7 @@
   const AUTO_END_SEC = 4; // 曲の残りがこれ以下で別の曲に変わったら「最後まで行って自動で次に進んだ」とみなす
   const AUTO_HOLD_SEC = 8; // 流していた人から次の曲が届くのを待つ時間
   const STABLE_SEC = 1.0; // 合った状態がこの時間続いたら「合った」とする
+  const SEEK_CONFIRM_SEC = 1.0; // 再生位置の飛びがこの時間続いたら「自分でシークした」とする(読み取りの一瞬のぶれでは送らない)
 
   function now() {
     return Date.now() / 1000;
@@ -42,6 +43,7 @@
       this.service = null;
       this.prevLocal = null; // 前回見た自分のプレイヤー { id, position, duration } (曲が最後まで行って次に変わったかを見分ける)
       this.autoHold = null; // { localId, until } 曲の終わりに勝手に始まった曲を、しばらく送らないでおく
+      this.seekSince = null; // 再生位置が共有の状態から飛んでいるのに気付いた時刻
     }
 
     _expected(snap, t) {
@@ -82,6 +84,7 @@
       this.lastCmd = {};
       this.notFound = null;
       this.autoHold = null;
+      this.seekSince = null;
       this.log(`届いた: ${song.title} / ${song.artist} (${playing ? '再生' : '一時停止'} ${position.toFixed(1)}秒) from ${fromLabel}`);
     }
 
@@ -170,6 +173,13 @@
         this.target = null;
         return this._detect(st, t, {}) || [];
       }
+      // プレイヤーが曲を読み込み中(曲名がまだ分からない)の間は、少しだけ待つ(自分で別の曲を選んだ直後かもしれない)
+      if (!localId && st.phase === 'loading') {
+        if (tg.loadingSince == null) tg.loadingSince = t;
+        if (t - tg.loadingSince < 3) return [];
+      } else {
+        tg.loadingSince = null;
+      }
       if (!tg.ownId || localId !== tg.ownId) {
         // 曲を探して流す(探すのに時間がかかることがあるので、少し長めに待ってから出し直す)
         // 前に出した「曲を流す」の結果がまだ来ていなければ待つ(探すのに時間がかかる Spotify などで、二重に流さないため)
@@ -232,6 +242,7 @@
       const position = Number(st.position) || 0;
       this.shared = { desc, ownId: song.id, playing: !!st.isPlaying, position, at: t, mine: true };
       this.autoHold = null;
+      this.seekSince = null;
       this.log(`送る: ${desc.title} (${st.isPlaying ? '再生' : '一時停止'} ${position.toFixed(1)}秒)`);
       this.send({ song: desc, isPlaying: !!st.isPlaying, position: Math.round(position * 100) / 100 });
     }
@@ -282,7 +293,11 @@
         return;
       }
       if (Math.abs(position - this._expected(sh, t)) > 3.0) {
-        this._broadcast(st, t); // シークした
+        // シークした(読み取りが一瞬ぶれただけのこともあるので、少し続いてから送る)
+        if (this.seekSince == null) this.seekSince = t;
+        else if (t - this.seekSince >= SEEK_CONFIRM_SEC) this._broadcast(st, t);
+      } else {
+        this.seekSince = null;
       }
     }
   }

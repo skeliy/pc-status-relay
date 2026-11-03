@@ -98,22 +98,68 @@
     return null;
   }
 
+  // 再生位置の読み方。画面下のつまみ(input type=range)の値は5秒刻み(step=5000)に丸められていて、
+  // そのまま使うと数秒ずれて見え、合わせ直し(シーク)を繰り返してしまう。
+  // バーの伸び具合(--progress-bar-transform の %)は細かいので、それと曲の長さから計算する。
+  // ただしバーは「--progress-bar-duration(1秒)後の位置」に向けて動くように、少し先の位置で書かれている。
+  // 時計の表示(1秒刻み・切り捨て)と食い違わない値を選ぶ
+  const barSeen = { pct: null, at: 0 };
+  function barInfo() {
+    const bar = $('[data-testid="playback-progressbar"] [data-testid="progress-bar"]') || $('[data-testid="progress-bar"]');
+    const style = (bar && bar.getAttribute('style')) || '';
+    const m = style.match(/--progress-bar-transform:\s*([\d.]+)%/);
+    if (!m) return null;
+    const d = style.match(/--progress-bar-duration:\s*([\d.]+)ms/);
+    return { pct: parseFloat(m[1]), lead: d ? Math.min(3, parseFloat(d[1]) / 1000) : 0 };
+  }
+
   function readPosition() {
     const pos = captured.position;
     const playing = isPlayingNow();
+    const now = Date.now();
     const range = $('[data-testid="playback-progressbar"] input[type="range"]');
+    let duration = 0;
     if (range && Number(range.max) > 0) {
       const max = Number(range.max);
-      const scale = max > 10000 ? 1000 : 1; // ミリ秒か秒か
-      return { position: Number(range.value) / scale, duration: max / scale };
+      duration = max / (max > 10000 ? 1000 : 1); // ミリ秒か秒か
     }
-    if (pos && pos.duration) {
-      const extra = playing ? ((Date.now() - pos.at) / 1000) * pos.rate : 0;
-      return { position: Math.min(pos.duration, pos.position + extra), duration: pos.duration };
+    if (!duration && M()) duration = M().parseClock(($('[data-testid="playback-duration"]') || {}).textContent) || 0;
+    if (!duration && pos && pos.duration) duration = pos.duration;
+
+    // 粗い値: 時計の表示(1秒刻み・切り捨て)か、つまみ(5秒刻み)
+    let coarse = null;
+    let tol = 3;
+    const clockText = String(($('[data-testid="playback-position"]') || {}).textContent || '').trim();
+    if (M() && /^\d+(:\d{2}){1,2}$/.test(clockText)) {
+      coarse = M().parseClock(clockText) + 0.5;
+      tol = 1.6;
+    } else if (range && Number(range.max) > 0) {
+      coarse = Number(range.value) / (Number(range.max) > 10000 ? 1000 : 1);
     }
-    const p = M() ? M().parseClock(($('[data-testid="playback-position"]') || {}).textContent) : 0;
-    const d = M() ? M().parseClock(($('[data-testid="playback-duration"]') || {}).textContent) : 0;
-    return { position: p, duration: d };
+    const near = (v) => coarse == null || Math.abs(v - coarse) <= tol;
+
+    // OS に知らせている再生位置(Spotify が送っていれば、いちばん正確)
+    if (pos && pos.duration && (!duration || Math.abs(pos.duration - duration) < 2)) {
+      const extra = playing ? ((now - pos.at) / 1000) * pos.rate : 0;
+      const v = Math.min(pos.duration, pos.position + extra);
+      if (near(v)) return { position: v, duration: duration || pos.duration };
+    }
+
+    const bar = barInfo();
+    if (bar && duration) {
+      if (bar.pct !== barSeen.pct) {
+        barSeen.pct = bar.pct;
+        barSeen.at = now;
+      }
+      const raw = (bar.pct / 100) * duration;
+      const extra = playing ? Math.min(2.5, (now - barSeen.at) / 1000) : 0;
+      // 少し先の位置で書かれている場合と、そのままの場合の両方を試し、時計と合うほうを使う
+      const cands = [raw - bar.lead + extra, raw + extra].map((v) => Math.max(0, Math.min(duration, v)));
+      // ちょうど秒の境目でどちらとも言えない時は、先の位置で書かれているほう(ふつうの場合)にする
+      const best = coarse == null || Math.abs(cands[0] - coarse) <= Math.abs(cands[1] - coarse) + 0.1 ? cands[0] : cands[1];
+      if (near(best)) return { position: best, duration };
+    }
+    return { position: coarse != null ? Math.min(duration || Infinity, coarse) : 0, duration };
   }
 
   // 再生中かどうか: Media Session の状態 → 再生位置が進んでいるか、の順に見る
@@ -137,6 +183,7 @@
     return !$('[data-testid="login-button"]');
   }
 
+  const songSeen = { key: null, at: 0, pct: null };
   function readState() {
     if (!$('[data-testid="now-playing-bar"]') && !$('[data-testid="player-controls"]')) return { available: false, service: SERVICE };
     const meta = currentMeta();
@@ -145,6 +192,17 @@
     const id = trackId || (meta.title ? 'meta:' + metaKey(meta) : null);
     const playing = isPlayingNow();
     const { position, duration } = readPosition();
+    // 曲が変わった直後は、再生位置のバーがまだ前の曲のままのことがある。バーが書き換わるまで(長くても1.5秒)は
+    // 「読み込み中」として、前の曲の位置で送らない
+    const key = id || '';
+    if (key !== songSeen.key) {
+      songSeen.key = key;
+      songSeen.at = Date.now();
+      songSeen.pct = barSeen.pct;
+    }
+    if (id && Date.now() - songSeen.at < 1500 && barSeen.pct === songSeen.pct && songSeen.pct != null) {
+      return { available: true, loggedIn: loggedIn(), service: SERVICE, quietResolve: false, queue: [], song: null, isPlaying: false, phase: 'loading' };
+    }
     return {
       available: true,
       loggedIn: loggedIn(),
@@ -253,11 +311,17 @@
     const range = $('[data-testid="playback-progressbar"] input[type="range"]');
     if (range) {
       const scale = Number(range.max) > 10000 ? 1000 : 1;
+      // つまみは5秒刻みなので、そのまま値を入れると5秒単位に丸められてしまう。一時的に刻みを外してから入れる
+      const step = range.getAttribute('step');
+      range.setAttribute('step', 'any');
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
       setter.call(range, String(Math.round(sec * scale)));
       range.dispatchEvent(new Event('input', { bubbles: true }));
       range.dispatchEvent(new Event('change', { bubbles: true }));
+      if (step != null) range.setAttribute('step', step);
+      else range.removeAttribute('step');
     }
+    barSeen.pct = null; // バーの表示が変わるまでは、前の位置から足していかない
   }
 
   function adjusted(cmd) {
