@@ -41,7 +41,7 @@
       this.notFound = null; // { localId, title } … 届いた曲が自分のサービスに無かった時
       this.notice = null; // { text, until }
       this.service = null;
-      this.prevLocal = null; // 前回見た自分のプレイヤー { id, position, duration } (曲が最後まで行って次に変わったかを見分ける)
+      this.lastOnShared = null; // 共有の曲を最後に見た時の自分のプレイヤー { id, position, duration, at } (曲が最後まで行って次に変わったかを見分ける)
       this.autoHold = null; // { localId, until } 曲の終わりに勝手に始まった曲を、しばらく送らないでおく
       this.seekSince = null; // 再生位置が共有の状態から飛んでいるのに気付いた時刻
     }
@@ -141,7 +141,10 @@
       if (this.target) cmds = this._converge(state, t);
       else if (opts.broadcast !== false) cmds = this._detect(state, t, opts) || [];
       const song = state.song;
-      this.prevLocal = song && song.id ? { id: song.id, position: Number(state.position) || 0, duration: Number(song.duration) || 0 } : this.prevLocal;
+      const sharedId = (this.target && this.target.ownId) || (this.shared && this.shared.ownId);
+      if (song && song.id && song.id === sharedId) {
+        this.lastOnShared = { id: song.id, position: Number(state.position) || 0, duration: Number(song.duration) || 0, at: t };
+      }
       return cmds;
     }
 
@@ -168,6 +171,10 @@
 
       // 曲を流し終えた後に、聴いている人が自分で別の曲を選んだ → 合わせるのをやめて、その曲をみんなに送る
       const loadingNow = Object.values(this.pending).some((c) => c.action === 'load');
+      if (tg.loaded && tg.ownId && localId && localId !== tg.ownId && this._autoAdvanced(tg.ownId, st, t)) {
+        this.target = null;
+        return this._holdAutoAdvance(this.shared, st, t);
+      }
       if (tg.loaded && tg.ownId && localId && localId !== tg.ownId && !loadingNow && since('load') > 3 && st.phase === PLAYING) {
         this.log('合わせている途中で、自分で別の曲を選んだ');
         this.target = null;
@@ -217,11 +224,21 @@
       return cmds;
     }
 
-    // 前回まで共有の曲を最後近くまで流していて、今は別の曲の頭にいる = 曲が終わって自動で次に進んだ
-    _autoAdvanced(sh, st) {
-      const prev = this.prevLocal;
-      if (!prev || prev.id !== sh.ownId || !prev.duration) return false;
-      return prev.position >= prev.duration - AUTO_END_SEC && (Number(st.position) || 0) < 6;
+    // 共有の曲を最後近くまで流していたのに、今は別の曲 = 曲が終わって、自分のプレイヤーが自分のキュー・おすすめで次に進んだ
+    // (次の曲が「読み込み中」の間に前の曲の記録が上書きされないよう、共有の曲を最後に見た時の記録で判断する)
+    _autoAdvanced(ownId, st, t) {
+      const prev = this.lastOnShared;
+      if (!prev || prev.id !== ownId || !prev.duration || !st.song || st.song.id === ownId) return false;
+      return prev.position >= prev.duration - AUTO_END_SEC && t - prev.at < 30;
+    }
+
+    // 曲を選んだのが自分でない時、曲の終わりに自分のプレイヤーが勝手に始めた曲は止めて、選んだ人の次の曲を待つ
+    // (選んだ人の曲がまだ終わっていなければ、その残りの時間も待つ)
+    _holdAutoAdvance(sh, st, t) {
+      const remaining = sh ? Math.max(0, (Number(sh.desc && sh.desc.duration) || 0) - this._expected(sh, t)) : 0;
+      this.autoHold = { localId: st.song.id, until: t + remaining + AUTO_HOLD_SEC, sawPaused: false };
+      this.log('曲が終わった → 自分のプレイヤーが始めた曲は止めて、選んだ人の次の曲を待つ');
+      return st.isPlaying ? [this._cmd('pause')] : [];
     }
 
     _broadcast(st, t) {
@@ -266,18 +283,29 @@
       const sh = this.shared;
       const playing = !!st.isPlaying;
       if (!sh || song.id !== sh.ownId) {
-        if (!(playing && st.phase === PLAYING)) return;
         // 曲が最後まで流れて、自分のプレイヤーが勝手に次の曲(キューの次・おすすめの自動再生)を始めた時。
-        // その曲を選んで流していたのが自分でなければ、みんなに送らない(送ると、流していた人の次の曲から外れてしまう)。
-        // 流していた人から次の曲が届くのを待つ
-        if (this.autoHold && this.autoHold.localId === song.id) {
-          if (t < this.autoHold.until) return;
-          this.autoHold = null; // しばらく待っても誰からも来なかった → この曲をみんなに送る
-        } else if (sh && !sh.mine && this._autoAdvanced(sh, st)) {
-          this.log('曲が終わった → 流していた人から次の曲が届くのを待つ');
-          this.autoHold = { localId: song.id, until: t + AUTO_HOLD_SEC };
-          return;
+        // その曲を選んで流していたのが自分でなければ、止めて、みんなには送らない(選んだ人のキューの次の曲に合わせる)
+        const hold = this.autoHold;
+        if (hold && hold.localId === song.id) {
+          if (!playing) {
+            if (hold.pausedAt == null) hold.pausedAt = t;
+            hold.resumedAt = null;
+            return;
+          }
+          // 止めた後にまた流れ始めた。読み込みの途中で止めると、読み込み終わりにプレイヤーが自分で再生し直すことがあるので、
+          // 止まってから少しの間に始まったものはプレイヤーのせいとみなして、もう一度止める。しばらくしてからなら、聴いている人が再生した
+          const sincePause = t - (this.lastCmd.pause == null ? -1e9 : this.lastCmd.pause);
+          const userResumed = hold.pausedAt != null && t - hold.pausedAt > 4;
+          if (!userResumed) {
+            if (sincePause > 1.5) return [this._cmd('pause')];
+            return;
+          }
+          if (t < hold.until) return; // 選んだ人の次の曲が届くのを待つ(届けばそちらに合わせる)
+          this.autoHold = null; // 待っても届かず、聴いている人が自分で再生した → この曲をみんなに送る
+        } else if (sh && !sh.mine && this._autoAdvanced(sh.ownId, st, t)) {
+          return this._holdAutoAdvance(sh, st, t);
         }
+        if (!(playing && st.phase === PLAYING)) return;
         this._broadcast(st, t);
         return;
       }
