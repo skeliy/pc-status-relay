@@ -127,7 +127,11 @@
                 ? el('button', {
                     class: 'primary',
                     text: r.open ? T('join') : T('host'),
-                    onclick: (e) => { e.target.disabled = true; action({ action: 'host', room: r.room }); },
+                    onclick: (e) => {
+                      e.target.disabled = true;
+                      // 通行証の部屋は「ホストする/参加する」、一緒に聴いた人の部屋は友達として入る
+                      action({ action: r.friend && !r.pass ? 'join-friend' : 'host', room: r.room });
+                    },
                   })
                 : null,
             ]);
@@ -148,7 +152,9 @@
       );
       const head = T('roomOf', room.owner || '') + (ui.connected ? '' : T('connectingSuffix'));
       const buttons = [];
-      if (ui.mode === 'guest') buttons.push(el('button', { text: T('leave'), onclick: () => action({ action: 'leave' }) }));
+      if (room.role === 'self') {
+        if ((room.members || []).length > 1) buttons.push(el('button', { text: T('endAll'), onclick: () => action({ action: 'end-self' }) }));
+      } else if (ui.mode === 'guest') buttons.push(el('button', { text: T('leave'), onclick: () => action({ action: 'leave' }) }));
       else if ((room.members || []).length > 1) {
         buttons.push(el('button', { text: room.role === 'owner' ? T('endAll') : T('leave'), onclick: () => action({ action: 'stop' }) }));
       }

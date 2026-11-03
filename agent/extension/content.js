@@ -188,12 +188,12 @@
       wrap.appendChild(pill([text(T('connecting'), 'muted')]));
     } else if (room && others.length > 0) {
       // 誰が参加しているかを、自分も含めて1人ずつ(人のアイコンと名前)並べる
-      const leaveLabel = room.role === 'owner' ? T('end') : T('leave');
+      const leaveLabel = room.role === 'owner' || room.role === 'self' ? T('end') : T('leave');
       wrap.appendChild(
         el('div', { class: 'card' }, [
           el('div', { class: 'head', title: room.role === 'owner' ? T('ownerHint') : T('guestHint') }, [
             el('span', { class: 'title', text: '🎧 ' + T('listeningHeader', members.length) }),
-            button(leaveLabel, () => sendAction(ui.mode === 'guest' ? 'leave' : 'stop')),
+            button(leaveLabel, () => sendAction(room.role === 'self' ? 'end-self' : ui.mode === 'guest' ? 'leave' : 'stop')),
           ]),
           ...members.map((m) =>
             el('div', { class: 'person' + (m.id === room.you ? ' me' : '') }, [
@@ -209,6 +209,9 @@
       wrap.appendChild(
         pill([text(T('requesting')), text(T('waitingApproval'), 'muted')], [button(T('cancel'), () => sendAction('cancel'))])
       );
+    } else if (ui.mode === 'guest' && room && room.role === 'self') {
+      // 1人で流している(自分の部屋)。一緒に聴いたことのある人が入ってこられる
+      wrap.appendChild(pill([text(T('selfRoom')), text(T('selfRoomHint'), 'muted')]));
     } else if (ui.mode === 'guest') {
       const hosting = !!(room && room.you && room.host === room.you);
       wrap.appendChild(

@@ -90,6 +90,8 @@
       hosting: '🎧 You’re hosting the room',
       hostingHint: 'Friends can join from the link or the extension icon.',
       roomClosedCanHost: 'Not open — you can start it as the host',
+      selfRoom: '🎧 Friends can join you',
+      selfRoomHint: 'People who’ve listened with you will see a Join button while you play.',
     },
     ja: {
       brand: '一緒に聴く',
@@ -175,6 +177,8 @@
       hosting: '🎧 あなたがホストの部屋',
       hostingHint: '友達はリンクか拡張機能のアイコンから入れます。',
       roomClosedCanHost: '今は開いていません(あなたがホストとして開けます)',
+      selfRoom: '🎧 友達が入ってこられます',
+      selfRoomHint: '一緒に聴いたことのある人には、あなたが曲を流している間「参加する」ボタンが出ます。',
     },
   };
 

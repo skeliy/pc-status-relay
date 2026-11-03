@@ -124,6 +124,69 @@ function verifyPass(id, data) {
   return { room };
 }
 
+// ---------------------------------------------------------------- 一緒に聴いた人(友達)
+// 同じ部屋で一緒に聴いた人どうしには「友達カード」を渡す(拡張機能が覚えておく)。
+// カードを持っていれば、その人が今どこかの部屋で曲を流している時に、その部屋に入れる。
+// PC Status のエージェントを動かしている人(合言葉を知っている仲間)には「仲間カード」を渡し、仲間どうしは最初から友達とみなす
+const PRESENCE_MS = 70000; // 拡張機能が部屋を見に来なくなってから、この時間で「もういない」とする
+
+function friendSig(holder, friend) {
+  return crypto.createHmac('sha256', PASS_SECRET).update('friend\n' + holder + '\n' + friend).digest('base64url');
+}
+
+function agentSig(pc) {
+  return crypto.createHmac('sha256', PASS_SECRET).update('agent\n' + pc).digest('base64url');
+}
+
+function viewerOf(m) {
+  return m.viewer || m.clientId || null;
+}
+
+// 友達(の拡張機能の番号)の集まり。カードを確かめる
+function friendSet(auth, data) {
+  const me = auth.id;
+  const set = new Set();
+  const list = Array.isArray(data.friends) ? data.friends.slice(0, 300) : [];
+  for (const c of list) {
+    if (c && typeof c.f === 'string' && typeof c.s === 'string' && c.f.length <= 40 && c.s.length <= 60 && c.f !== me) {
+      if (safeEqual(c.s, friendSig(me, c.f))) set.add(c.f);
+    }
+  }
+  const a = data.agent;
+  if (a && typeof a.pc === 'string' && typeof a.sig === 'string' && a.sig.length <= 60 && safeEqual(a.sig, agentSig(a.pc))) {
+    auth.rec.agentPc = a.pc.slice(0, 64);
+  }
+  if (auth.rec.agentPc) {
+    for (const [id, c] of Object.entries(clients)) if (c.agentPc && id !== me) set.add(id);
+  }
+  return set;
+}
+
+// その拡張機能が今いる部屋(最近見に来ていて、部屋が開いていて、まだ中にいる時だけ)
+function presentRoom(clientId) {
+  const c = clients[clientId];
+  const p = c && c.presence;
+  if (!p || Date.now() - p.at > PRESENCE_MS) return null;
+  const r = rooms[p.room];
+  if (!r || !isOpen(r) || !r.members.has(p.token)) return null;
+  return r;
+}
+
+// 1人が同時に2つの部屋に入らないよう、ほかの部屋からは出す(拡張機能の番号で見る)
+function leaveOtherRooms(clientId, exceptId) {
+  if (!clientId) return;
+  for (const r of Object.values(rooms)) {
+    if (r.id === exceptId) continue;
+    for (const [t, m] of Array.from(r.members)) {
+      if (m.kind !== 'owner' && (m.clientId === clientId || m.viewer === clientId)) removeMember(r, t, 'moved');
+    }
+  }
+}
+
+function selfRoomId(clientId) {
+  return 'u-' + crypto.createHash('sha256').update(String(clientId)).digest('hex').slice(0, 12);
+}
+
 function passwordMatches(room, password) {
   return !!(room && room.passKey && password && safeEqual(room.passKey.toString('hex'), passKeyFor(room.id, password).toString('hex')));
 }
@@ -140,12 +203,11 @@ function nowPlaying(room, now) {
   const last = room.lastState;
   if (!last || !last.data || !last.data.song || !last.data.isPlaying) return null;
   const from = Array.from(room.members.values()).find((m) => m.id === last.from);
-  if (!from) return null;
   const age = (now - last.at) / 1000;
   const duration = Number(last.data.song.duration) || 0;
   if (age > 900) return null;
   if (duration && (Number(last.data.position) || 0) + age > duration + 20) return null; // 曲が終わったまま次が来ていない
-  return { title: last.data.song.title || null, artist: last.data.song.artist || null, from: last.fromLabel || from.label };
+  return { title: last.data.song.title || null, artist: last.data.song.artist || null, from: last.fromLabel || (from && from.label) || null };
 }
 
 function safeEqual(a, b) {
@@ -311,7 +373,21 @@ function respondPoll(res, room, member, messages, sendJson) {
     owner: room.ownerLabel,
     host: (hostOf(room) || {}).id || null,
     known: knownList(room),
+    cards: friendCards(room, member),
   });
+}
+
+// 一緒に聴いている人の友達カード(自分も相手も拡張機能の番号が分かっている時だけ)
+function friendCards(room, member) {
+  const me = viewerOf(member);
+  if (!me) return [];
+  const out = [];
+  for (const m of room.members.values()) {
+    const f = viewerOf(m);
+    if (!f || f === me || m === member) continue;
+    out.push({ f, l: m.label, s: friendSig(me, f) });
+  }
+  return out;
 }
 
 function wake(room) {
@@ -362,6 +438,8 @@ function removeMember(room, token, reason) {
   const member = room.members.get(token);
   if (!member) return;
   room.members.delete(token);
+  const v = viewerOf(member);
+  if (v && clients[v] && clients[v].presence && clients[v].presence.token === token) clients[v].presence = null;
   pushMessage(room, { type: 'left', from: member.id, fromLabel: member.label, data: { reason } });
   if (token === room.hostToken) pickHost(room);
 }
@@ -581,6 +659,12 @@ function handle(req, res, parsedUrl, ctx) {
       return true;
     }
     member.lastSeen = Date.now();
+    // どの拡張機能が見に来ているか(友達が「今どの部屋にいるか」を知るため)
+    const viewer = clientAuth({ client: parsedUrl.searchParams.get('client'), key: parsedUrl.searchParams.get('key') });
+    if (viewer) {
+      member.viewer = viewer.id;
+      viewer.rec.presence = { room: id, token, at: Date.now() };
+    }
     const since = parseInt(parsedUrl.searchParams.get('since') || '-1', 10);
     if (!Number.isFinite(since) || since < 0) {
       // 繋がった直後: 古いメッセージは渡さないが、「今の曲」(最後に送られた状態)だけはすぐ渡す
@@ -694,6 +778,7 @@ function handle(req, res, parsedUrl, ctx) {
         if (!room) return sendJson(res, 403, { error: 'bad-pass' });
       }
       const auth = clientAuth(data);
+      if (auth) leaveOtherRooms(auth.id, id);
       const hosting = !isOpen(room);
       if (hosting) {
         room.queue = [];
@@ -709,14 +794,66 @@ function handle(req, res, parsedUrl, ctx) {
       return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel, host: hosting, pass: makePass(room) });
     }
 
+    // エージェントが、自分の拡張機能に渡す「仲間カード」をもらう
+    if (action === 'agent-card') {
+      if (!isWriteAuthorized(req)) return sendJson(res, 401, { error: 'unauthorized' });
+      const pc = typeof data.pc === 'string' ? data.pc.slice(0, 64) : '';
+      if (!pc) return sendJson(res, 400, { error: 'pc required' });
+      return sendJson(res, 200, { ok: true, card: { pc, sig: agentSig(pc) } });
+    }
+
+    // 拡張機能だけの人が1人で曲を流している時の、自分の部屋(一緒に聴いたことのある人が入ってこられる)
+    if (action === 'host-self') {
+      const auth = clientAuth(data);
+      if (!auth) return sendJson(res, 403, { error: 'unknown client' });
+      const sid = selfRoomId(auth.id);
+      leaveOtherRooms(auth.id, sid);
+      const r = rooms[sid] || (rooms[sid] = newRoom(sid));
+      const hosting = !isOpen(r);
+      if (hosting) {
+        r.queue = [];
+        r.lastState = null;
+      }
+      const m = addMember(r, {
+        label: cleanLabel(data.label || auth.rec.label, 'guest'),
+        service: SERVICES.has(data.service) ? data.service : auth.rec.service,
+        kind: 'guest',
+        clientId: auth.id,
+      });
+      m.viewer = auth.id;
+      auth.rec.presence = { room: sid, token: m.token, at: now };
+      if (hosting) setHost(r, m);
+      return sendJson(res, 200, { ok: true, room: sid, token: m.token, you: m.id, owner: r.ownerLabel, host: hosting });
+    }
+
     const room = rooms[id];
     if (!room || !isOpen(room)) return sendJson(res, 404, { error: 'room is not open' });
+
+    // 一緒に聴いたことのある人(友達)が今いる部屋に入る
+    if (action === 'join-friend') {
+      const auth = clientAuth(data);
+      if (!auth) return sendJson(res, 403, { error: 'unknown client' });
+      const set = friendSet(auth, data);
+      const ok = Array.from(room.members.values()).some((m) => set.has(viewerOf(m)));
+      if (!ok) return sendJson(res, 403, { error: 'not-friend' });
+      leaveOtherRooms(auth.id, id);
+      const m = addMember(room, {
+        label: cleanLabel(data.label || auth.rec.label, 'guest'),
+        service: SERVICES.has(data.service) ? data.service : auth.rec.service,
+        kind: 'guest',
+        clientId: auth.id,
+      });
+      m.viewer = auth.id;
+      auth.rec.presence = { room: id, token: m.token, at: now };
+      return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel, pass: makePass(room) });
+    }
 
     // 通行証で途中参加する(パスワードを入れ直さなくてよい)
     if (action === 'rejoin') {
       if (!room.passKey) return sendJson(res, 403, { error: 'guests-not-allowed' });
       if (!checkPass(room, data)) return sendJson(res, 403, { error: 'bad-pass' });
       const auth = clientAuth(data);
+      if (auth) leaveOtherRooms(auth.id, id);
       const m = addMember(room, {
         label: cleanLabel(data.label || (auth && auth.rec.label), 'guest'),
         service: SERVICES.has(data.service) ? data.service : auth && auth.rec.service,
@@ -768,6 +905,7 @@ function handle(req, res, parsedUrl, ctx) {
         pushMessage(room, { type: 'declined', from: null, fromLabel: auth.rec.label || 'guest', data: {} });
         return sendJson(res, 200, { ok: true });
       }
+      leaveOtherRooms(auth.id, id);
       const m = addMember(room, { label: auth.rec.label || 'guest', service: auth.rec.service, kind: 'guest', clientId: auth.id });
       return sendJson(res, 200, { ok: true, room: id, token: m.token, you: m.id, owner: room.ownerLabel, pass: makePass(room) });
     }
@@ -902,6 +1040,37 @@ function handleClient(req, res, parsedUrl, ctx) {
       c.waiters = c.waiters.filter((w) => w !== waiter);
     });
     c.waiters.push(waiter);
+    return;
+  }
+
+  // 一緒に聴いたことのある人が、今どの部屋で曲を流しているか
+  if (action === 'friends' && req.method === 'POST') {
+    readJsonBody(req, 64 * 1024, (err, data) => {
+      if (err) return sendJson(res, 400, { error: err.message });
+      const auth = clientAuth(data);
+      if (!auth) return sendJson(res, 403, { error: 'unknown client' });
+      const set = friendSet(auth, data);
+      const mine = presentRoom(auth.id);
+      const now = Date.now();
+      const byRoom = new Map();
+      for (const f of set) {
+        const r = presentRoom(f);
+        if (!r || r === mine) continue;
+        const m = r.members.get(clients[f].presence.token);
+        const e = byRoom.get(r.id) || { room: r.id, owner: r.ownerLabel, friends: [] };
+        if (m && !e.friends.includes(m.label)) e.friends.push(m.label);
+        byRoom.set(r.id, e);
+      }
+      const list = Array.from(byRoom.values()).map((e) => {
+        const r = rooms[e.room];
+        return Object.assign(e, {
+          members: memberList(r).map((m) => ({ label: m.label, service: m.service, host: m.host })),
+          playing: nowPlaying(r, now),
+          passwordRoom: !!r.passKey,
+        });
+      });
+      sendJson(res, 200, { ok: true, rooms: list, agent: !!auth.rec.agentPc });
+    });
     return;
   }
 

@@ -111,6 +111,7 @@ class MusicSync:
         self.own_members = []
         self.own_host = True  # 自分の部屋のホストが自分か(ほかの人が先に開いていれば False)
         self.own_owner = self.pc_label  # 自分の部屋のホストの名前
+        self.agent_card = None  # 拡張機能に渡す「仲間カード」(PC Status の仲間どうしは、最初から一緒に聴ける友達)
         self.joined = None  # 友達の部屋に入っている時 {"id", "token", "owner", "session"}
         self.joined_members = []
         self.pending_out = None  # {"id", "expires"}
@@ -465,6 +466,10 @@ class MusicSync:
                 if not self.own_token or now - last_open > ROOM_HEARTBEAT_SEC:
                     self.open_room()
                     last_open = now
+                    if not self.agent_card:
+                        r = self._room_post("agent-card", {"pc": self.pc_id}, auth=True)
+                        if r and r.get("card"):
+                            self.agent_card = r["card"]
                 with self.lock:
                     joined = self.joined
                     own_token = self.own_token
@@ -528,7 +533,7 @@ class MusicSync:
                 room = {"id": self.room_id, "token": self.own_token, "role": "owner", "owner": self.own_owner or self.pc_label}
             else:
                 room = None
-            return {"room": room, "ui": self._ui_locked(), "extVersion": self.extension_version()}
+            return {"room": room, "ui": self._ui_locked(), "extVersion": self.extension_version(), "agentCard": self.agent_card}
 
     def handle_ext_action(self, action, sid=None):
         if action == "request":
