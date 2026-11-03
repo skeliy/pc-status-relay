@@ -175,12 +175,29 @@ async function declineInvite(code) {
   return { ok: true };
 }
 
+// 部屋に入った時: 自分で選んだ音楽サービスのタブを前に出す。無ければ開く
+// (ほかのサービスのタブ、たとえば動画を見ている YouTube が開いていても、選んだサービスのタブを使う)
 async function openServiceIfNeeded(service) {
-  const existing = await chrome.tabs.query({ url: MUSIC_URL_PATTERNS });
-  if (existing.length) return false;
-  const url = SERVICE_URLS[service] || SERVICE_URLS.apple;
-  await chrome.tabs.create({ url });
+  const key = SERVICE_URLS[service] ? service : 'apple';
+  const pattern = MUSIC_URL_PATTERNS[Object.keys(SERVICE_URLS).indexOf(key)];
+  const existing = await chrome.tabs.query({ url: pattern });
+  if (existing.length) {
+    const tab = existing.find((t) => t.active) || existing.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+    try {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+    } catch (e) {}
+    return false;
+  }
+  await chrome.tabs.create({ url: SERVICE_URLS[key] });
   return true;
+}
+
+// 拡張機能だけで入っている時は、自分で選んだサービスのタブを優先して使う
+function preferredService() {
+  const c = room.creds;
+  if (c && c.mode === 'guest') return (guest && guest.service) || (client && client.service) || null;
+  return null;
 }
 
 // ツールバーのアイコンの印: 招待が来ていれば赤い「!」、一緒に聴いていれば人数
@@ -547,9 +564,12 @@ async function leaveGuestRoom(reason) {
 function primaryTab() {
   const now = Date.now();
   for (const [id, t] of tabs) if (now - t.at > TAB_ALIVE_MS) tabs.delete(id);
+  const pref = preferredService();
+  const hasPref = !!pref && Array.from(tabs.values()).some((t) => t.state && t.state.available && t.state.service === pref);
   let best = null;
   for (const t of tabs.values()) {
     if (!t.state || !t.state.available) continue;
+    if (hasPref && t.state.service !== pref) continue;
     if (!best || (t.lastPlaying || 0) > (best.lastPlaying || 0) || ((t.lastPlaying || 0) === (best.lastPlaying || 0) && t.at > best.at)) best = t;
   }
   return best;
