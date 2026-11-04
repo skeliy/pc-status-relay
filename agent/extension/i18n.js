@@ -55,6 +55,8 @@
       notConnectedAgent: 'Not connected to a room. Open a music service page.',
       notJoined: 'You haven’t joined a room yet. Open a Listen Together link from a friend, or wait for an invite. When one arrives, you’ll hear a sound and see a mark on this icon.',
       yourSettings: 'Your settings',
+      lyricsShow: 'Show lyrics on screen',
+      lyricsNotRunning: 'Turn this on to start the lyrics app.',
       nameLabel: 'Name (shown to everyone)',
       serviceLabel: 'Your music service',
       // 一時的な知らせ
@@ -161,6 +163,8 @@
       notJoined: 'まだ部屋に入っていません。友達から届いた「一緒に聴く」のリンクを開くか、招待が届くのを待ってください。招待が届くと、音が鳴ってこのアイコンに印が付きます。',
       yourSettings: 'あなたの設定',
       nameLabel: '名前(みんなに表示されます)',
+      lyricsShow: '画面に歌詞を表示する',
+      lyricsNotRunning: 'オンにすると、歌詞のアプリを起動します。',
       serviceLabel: '使っている音楽サービス',
       joinedNotice: (l) => `🎧 ${l} が入りました`,
       leftNotice: (l) => `${l} が出ました`,

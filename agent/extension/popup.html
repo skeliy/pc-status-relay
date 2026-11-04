@@ -46,6 +46,13 @@
   .lang-menu .check { color: var(--accent); visibility: hidden; }
   .lang-menu button[aria-checked="true"] .check { visibility: visible; }
   .hidden { display: none !important; }
+  .switch-row { display:flex; align-items:center; gap:10px; }
+  .switch-row .grow { flex:1; min-width:0; }
+  .switch { position:relative; flex:none; width:40px; height:24px; padding:0; border-radius:999px; background:#555970; }
+  .switch::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .15s ease; }
+  .switch[aria-checked="true"] { background:var(--accent); }
+  .switch[aria-checked="true"]::after { transform:translateX(16px); }
+  .switch:focus-visible { outline:2px solid #fff; outline-offset:2px; }
   .roomrow { display:flex; align-items:center; gap:10px; padding: 8px 10px; margin-bottom: 6px; border:1px solid var(--line); border-radius: 10px; }
   .roomrow.live { border-color: rgba(59,130,246,.6); background: rgba(59,130,246,.10); }
   .roomrow .grow { flex:1; min-width:0; }

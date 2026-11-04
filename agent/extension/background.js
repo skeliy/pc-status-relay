@@ -19,7 +19,7 @@ const TAB_ALIVE_MS = 3000;
 const SERVICE_URLS = { apple: 'https://music.apple.com/', spotify: 'https://open.spotify.com/', ytm: 'https://music.youtube.com/', youtube: 'https://www.youtube.com/' };
 const MUSIC_URL_PATTERNS = ['https://music.apple.com/*', 'https://open.spotify.com/*', 'https://music.youtube.com/*', 'https://www.youtube.com/*'];
 const SITE_SCRIPTS = [
-  { match: 'https://music.apple.com/*', main: ['match.js', 'apple.js'] },
+  { match: 'https://music.apple.com/*', main: ['match.js', 'apple.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
   { match: 'https://open.spotify.com/*', main: ['match.js', 'spotify.js'] },
   { match: 'https://music.youtube.com/*', main: ['match.js', 'ytm.js'] },
   { match: 'https://www.youtube.com/*', main: ['match.js', 'youtube.js'] },
@@ -1106,13 +1106,74 @@ async function popupState() {
     hasAgent: !!agent.data,
     ui: buildUi(true, p && p.state),
     musicTabOpen: !!p,
+    lyrics: await lyricsSwitchState(),
   };
+}
+
+// --- 歌詞オーバーレイ(別のアプリ。入れていない人のPCでは繋がらないだけで、何も起きない) ---
+const OVERLAY_URL = 'http://127.0.0.1:8789';
+let overlayDownUntil = 0;
+
+async function overlayPost(path, body, force) {
+  if (!force && Date.now() < overlayDownUntil) return null;
+  try {
+    const resp = await fetch(OVERLAY_URL + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PCS-Ext': '1' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(force ? 800 : 2000),
+    });
+    if (force && resp.ok) overlayDownUntil = 0;
+    return resp.ok ? await resp.json() : null;
+  } catch (e) {
+    overlayDownUntil = Date.now() + 5000; // 起動していない時は、しばらく聞きに行かない
+    return null;
+  }
+}
+
+// アイコンの画面に出すスイッチの状態。一度もアプリが見つかっていないPCでは、スイッチを出さない
+async function lyricsSwitchState() {
+  const state = await overlayPost('/state', {}, true);
+  if (state && state.ok) {
+    chrome.storage.local.set({ overlaySeen: true });
+    return { installed: true, running: true, enabled: !!state.enabled };
+  }
+  const stored = await chrome.storage.local.get('overlaySeen');
+  return { installed: !!stored.overlaySeen, running: false, enabled: false };
+}
+
+// スイッチをオンにした時にアプリが動いていなければ、起動を頼んで、動き始めたら表示をオンにする
+let lyricsLaunching = false;
+async function launchLyricsApp() {
+  if (lyricsLaunching) return;
+  lyricsLaunching = true;
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: 'lyricsoverlay://start' });
+    for (let i = 0; i < 120; i++) {
+      const state = await overlayPost('/state', {}, true);
+      if (state && state.ok) {
+        await overlayPost('/settings', { enabled: true }, true);
+        chrome.storage.local.set({ overlaySeen: true });
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } finally {
+    lyricsLaunching = false;
+    if (tab) chrome.tabs.remove(tab.id).catch(() => {});
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return false;
   let work = null;
-  if (message.type === 'tick' && sender.tab) work = handleTick(sender.tab.id, message.body || {}).then((d) => ({ ok: true, data: d }));
+  if (message.type === 'lyrics-launch') work = launchLyricsApp().then(() => ({ ok: true }));
+  else if (message.type === 'lyrics-set-enabled') work = overlayPost('/settings', { enabled: !!message.enabled }, true).then((d) => d || { ok: false });
+  else if (message.type === 'lyrics-tick' && sender.tab) work = overlayPost('/tick', message.tick).then((d) => d || {});
+  else if (message.type === 'lyrics-data' && sender.tab) work = overlayPost('/lyrics', message.lyrics).then(() => ({ ok: true }));
+  if (work) { /* 歌詞オーバーレイの連絡 */ }
+  else if (message.type === 'tick' && sender.tab) work = handleTick(sender.tab.id, message.body || {}).then((d) => ({ ok: true, data: d }));
   else if (message.type === 'action') work = handleAction(message.body || {}).then((d) => ({ ok: true, data: d }));
   else if (message.type === 'guest-join') work = handleGuestJoin(message.creds, sender);
   else if (message.type === 'popup-state') work = popupState().then((d) => ({ ok: true, data: d }));
@@ -1190,7 +1251,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     for (const tab of list) {
       try {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: site.main, world: 'MAIN' });
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js'].concat(site.extra || []) });
       } catch (e) {}
     }
   }

@@ -239,6 +239,38 @@
       );
     }
 
+    // 歌詞オーバーレイのスイッチ(アプリを入れている人だけ)
+    if (data.lyrics && data.lyrics.installed) {
+      const lyr = data.lyrics;
+      const label = el('div', { class: 'name', id: 'lyricsLabel', text: T('lyricsShow') });
+      const sw = el('button', {
+        class: 'switch',
+        type: 'button',
+        role: 'switch',
+        'aria-labelledby': 'lyricsLabel',
+        'aria-checked': String(lyr.running && lyr.enabled),
+        onclick: async () => {
+          const next = sw.getAttribute('aria-checked') !== 'true';
+          sw.setAttribute('aria-checked', String(next));
+          if (lyr.running) {
+            await send({ type: 'lyrics-set-enabled', enabled: next });
+            refresh(true);
+          } else if (next) {
+            // 新しいタブが開くとこの画面は閉じるので、結果を待たない
+            send({ type: 'lyrics-launch' });
+          }
+        },
+      });
+      app.appendChild(
+        section(null, [
+          el('div', { class: 'switch-row' }, [
+            el('div', { class: 'grow' }, [label, lyr.running ? null : el('div', { class: 'muted small', text: T('lyricsNotRunning') })]),
+            sw,
+          ]),
+        ])
+      );
+    }
+
     // 自分の名前とサービス(拡張機能だけの人)
     if (!data.hasAgent) {
       const name = el('input', { type: 'text', maxlength: '40', value: (data.client && data.client.label) || '' });

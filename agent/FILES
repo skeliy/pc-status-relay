@@ -16,6 +16,8 @@ extension/listen.js
 extension/sync_engine.js
 extension/match.js
 extension/apple.js
+extension/lyrics.js
+extension/lyrics_relay.js
 extension/spotify.js
 extension/ytm.js
 extension/youtube.js

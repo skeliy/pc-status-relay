@@ -1,0 +1,8 @@
+{
+  "name": "lyrics-overlay",
+  "productName": "Lyrics Overlay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Transparent always-on-top lyrics for Apple Music on the web",
+  "main": "main.js"
+}

@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
+<title>Lyrics Overlay</title>
+<link rel="stylesheet" href="settings.css">
+</head>
+<body>
+<main>
+  <p id="status" role="status"></p>
+  <label class="check"><input type="checkbox" id="enabled"><span data-t="enabled"></span></label>
+
+  <div class="field"><label for="opacity"><span data-t="opacity"></span><output for="opacity"></output></label><input type="range" id="opacity" min="10" max="100" step="1"></div>
+  <div class="field"><label for="fontSize"><span data-t="fontSize"></span><output for="fontSize"></output></label><input type="range" id="fontSize" min="16" max="96" step="1"></div>
+  <div class="field"><label for="width"><span data-t="width"></span><output for="width"></output></label><input type="range" id="width" min="160" max="1200" step="10"></div>
+  <div class="field"><label for="height"><span data-t="height"></span><output for="height"></output></label><input type="range" id="height" min="120" max="1200" step="10"></div>
+  <div class="move"><button id="moveBtn" type="button" aria-pressed="false"></button><small data-t="moveHelp"></small></div>
+  <div class="field"><label for="x"><span data-t="x"></span><output for="x"></output></label><input type="range" id="x" min="0" max="100" step="1"></div>
+  <div class="field"><label for="y"><span data-t="y"></span><output for="y"></output></label><input type="range" id="y" min="0" max="100" step="1"></div>
+  <div class="field"><label for="offsetMs"><span data-t="offsetMs"></span><output for="offsetMs"></output></label><input type="range" id="offsetMs" min="-2000" max="2000" step="50"><small data-t="offsetHelp"></small></div>
+  <div class="field" id="displayField"><label for="displayId"><span data-t="display"></span></label><select id="displayId"></select></div>
+
+  <label class="check"><input type="checkbox" id="shadow"><span data-t="shadow"></span></label>
+  <label class="check"><input type="checkbox" id="autoStart"><span data-t="autoStart"></span></label>
+</main>
+<script src="settings.js"></script>
+</body>
+</html>

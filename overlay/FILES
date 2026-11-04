@@ -1,0 +1,15 @@
+# 自動更新で配るファイルの一覧。増やしたらここにも書き足して、VERSION を上げる。
+package.json
+main.js
+preload.js
+overlay.html
+overlay.css
+overlay.js
+lyrics_core.js
+settings.html
+settings.css
+settings.js
+assets/icon.png
+fonts/inter-latin-700-normal.woff2
+fonts/inter-latin-ext-700-normal.woff2
+fonts/Inter-LICENSE.txt

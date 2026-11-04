@@ -358,6 +358,16 @@ Chrome・Brave・Edge で使えます(Firefox は非対応)。
 
 ---
 
+## 6. 歌詞オーバーレイ(Apple Music)
+
+ブラウザ版の Apple Music で流している曲の歌詞を、画面の上に文字だけで表示する別のアプリです(`overlay` フォルダ)。背景は透明で、マウスの操作はすべて下の画面に通り抜けます。
+
+- 入れ方: PowerShell で `irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1 | iex` を実行します。Electron(約160MB)をダウンロードして `%LOCALAPPDATA%\LyricsOverlay` に入れます。拡張機能 Listen Together も必要です。
+- 設定: 通知領域のアイコンから、透明度・文字の大きさ・位置・歌詞のタイミングを変えられます。
+- 更新: アプリが2時間ごとに `overlay/VERSION` を確かめ、新しければ自分で更新します(歌詞を表示している間は更新しません)。ファイルを増やしたら `overlay/FILES` に書き足します。
+- やめる時: `irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-uninstall.ps1 | iex`
+- 仕組み: `lyrics.js`(ページの中)→ `lyrics_relay.js` → `background.js` → `http://127.0.0.1:8789`(アプリ)の順に再生位置を送ります。アプリが歌詞を求めた時だけ、その人の Apple Music のログインで歌詞を取得します。歌詞はメモリの中にだけ置き、中継サーバーには送りません。Apple が公開していない取得方法なので、変更されると動かなくなることがあります。
+
 ## セキュリティ上の注意
 
 - `WRITE_TOKEN` は「誰でもなりすまして状態を書き込めるか」を分ける鍵です。ソースコードに埋め込んだままGitHubの公開リポジトリにpushしないでください(公開する場合は環境変数化し、コードには埋め込まないこと)。

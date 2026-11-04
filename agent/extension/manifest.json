@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Listen Together",
-  "version": "3.7.3",
+  "version": "3.8.2",
   "description": "Listen to the same song at the same time with friends on the web players of Apple Music, Spotify, YouTube Music and YouTube, even across different services.",
   "permissions": [
     "scripting",
@@ -29,7 +29,8 @@
       ],
       "js": [
         "match.js",
-        "apple.js"
+        "apple.js",
+        "lyrics.js"
       ],
       "world": "MAIN",
       "run_at": "document_idle"
@@ -77,6 +78,15 @@
       "js": [
         "i18n.js",
         "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://music.apple.com/*"
+      ],
+      "js": [
+        "lyrics_relay.js"
       ],
       "run_at": "document_idle"
     },
