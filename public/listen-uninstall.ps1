@@ -8,6 +8,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ltRoot = Join-Path $env:LOCALAPPDATA 'ListenTogether'
+Remove-Item -Path 'HKCU:\Software\Classes\lyricsoverlay-setup' -Recurse -Force -ErrorAction SilentlyContinue
 
 if (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
     if (Get-ScheduledTask -TaskName 'ListenTogetherUpdater' -ErrorAction SilentlyContinue) {

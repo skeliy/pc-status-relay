@@ -99,6 +99,80 @@
     return el('section', { class: 'update' }, parts);
   }
 
+  const GEAR_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  let lyricsAsking = null; // インストールの確認を出しているか(null はまだ決めていない)
+
+  function lyricsSection(data) {
+    const lyr = data.lyrics;
+    const titleRow = (note, controls) =>
+      el('div', { class: 'switch-row' }, [
+        el('div', { class: 'grow' }, [el('div', { class: 'name', id: 'lyricsLabel', text: T('lyricsShow') }), note ? el('div', { class: 'muted small', text: note }) : null]),
+        ...controls,
+      ]);
+
+    // インストールの最中
+    if (!lyr.installed && lyr.installing) {
+      return section(null, [
+        titleRow(T('lyricsInstalling'), []),
+        el('div', { class: 'row' }, [el('button', { text: T('lyricsShowGuide'), onclick: () => send({ type: 'lyrics-guide', mode: 'install' }) })]),
+      ]);
+    }
+
+    // まだ入っていない人には、はじめに一度だけ確認を出す(Apple Music 以外を使っている人には、スイッチを押すまで出さない)
+    if (!lyr.installed) {
+      const service = data.client && data.client.service;
+      if (lyricsAsking === null) lyricsAsking = lyr.askFirst && (!service || service === 'apple');
+      if (lyricsAsking) {
+        return section(null, [
+          el('div', { class: 'name', text: T('lyricsAskTitle') }),
+          el('div', { class: 'muted small', text: T('lyricsAskBody') }),
+          el('div', { class: 'row' }, [
+            el('button', { class: 'primary', text: T('lyricsYes'), onclick: () => send({ type: 'lyrics-guide', mode: 'install' }) }),
+            el('button', { text: T('lyricsNo'), onclick: async () => { lyricsAsking = false; await send({ type: 'lyrics-dismiss' }); refresh(true); } }),
+          ]),
+        ]);
+      }
+    }
+
+    const sw = el('button', {
+      class: 'switch',
+      type: 'button',
+      role: 'switch',
+      'aria-labelledby': 'lyricsLabel',
+      'aria-checked': String(lyr.running && lyr.enabled),
+      onclick: async () => {
+        if (!lyr.installed) {
+          lyricsAsking = true;
+          return refresh(true);
+        }
+        const next = sw.getAttribute('aria-checked') !== 'true';
+        sw.setAttribute('aria-checked', String(next));
+        if (lyr.running) {
+          await send({ type: 'lyrics-set-enabled', enabled: next });
+          refresh(true);
+        } else if (next) {
+          send({ type: 'lyrics-guide', mode: 'start' });
+        }
+      },
+    });
+    const controls = [sw];
+    if (lyr.installed) {
+      const gear = el('button', {
+        class: 'icon-btn',
+        type: 'button',
+        title: T('lyricsSettings'),
+        'aria-label': T('lyricsSettings'),
+        onclick: () => {
+          send({ type: 'lyrics-open-settings' });
+          setTimeout(() => window.close(), 150);
+        },
+      });
+      gear.innerHTML = GEAR_ICON;
+      controls.unshift(gear);
+    }
+    return section(null, [titleRow(lyr.installed && !lyr.running ? T('lyricsNotRunning') : null, controls)]);
+  }
+
   function render(data) {
     app.textContent = '';
     if (!data) {
@@ -239,37 +313,8 @@
       );
     }
 
-    // 歌詞オーバーレイのスイッチ(アプリを入れている人だけ)
-    if (data.lyrics && data.lyrics.installed) {
-      const lyr = data.lyrics;
-      const label = el('div', { class: 'name', id: 'lyricsLabel', text: T('lyricsShow') });
-      const sw = el('button', {
-        class: 'switch',
-        type: 'button',
-        role: 'switch',
-        'aria-labelledby': 'lyricsLabel',
-        'aria-checked': String(lyr.running && lyr.enabled),
-        onclick: async () => {
-          const next = sw.getAttribute('aria-checked') !== 'true';
-          sw.setAttribute('aria-checked', String(next));
-          if (lyr.running) {
-            await send({ type: 'lyrics-set-enabled', enabled: next });
-            refresh(true);
-          } else if (next) {
-            // 新しいタブが開くとこの画面は閉じるので、結果を待たない
-            send({ type: 'lyrics-launch' });
-          }
-        },
-      });
-      app.appendChild(
-        section(null, [
-          el('div', { class: 'switch-row' }, [
-            el('div', { class: 'grow' }, [label, lyr.running ? null : el('div', { class: 'muted small', text: T('lyricsNotRunning') })]),
-            sw,
-          ]),
-        ])
-      );
-    }
+    // 歌詞オーバーレイ
+    if (data.lyrics && data.lyrics.supported) app.appendChild(lyricsSection(data));
 
     // 自分の名前とサービス(拡張機能だけの人)
     if (!data.hasAgent) {

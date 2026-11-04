@@ -1131,44 +1131,48 @@ async function overlayPost(path, body, force) {
   }
 }
 
-// アイコンの画面に出すスイッチの状態。一度もアプリが見つかっていないPCでは、スイッチを出さない
+const LYRICS_INSTALL_GIVE_UP_MS = 15 * 60 * 1000;
+
+// アイコンの画面と案内のページに出す、歌詞アプリの状態(今のところ Windows だけ)
 async function lyricsSwitchState() {
+  const platform = await chrome.runtime.getPlatformInfo();
+  if (platform.os !== 'win') return { supported: false };
   const state = await overlayPost('/state', {}, true);
   if (state && state.ok) {
-    chrome.storage.local.set({ overlaySeen: true });
-    return { installed: true, running: true, enabled: !!state.enabled };
+    await chrome.storage.local.set({ overlaySeen: true });
+    await chrome.storage.local.remove('lyricsInstallAt');
+    return { supported: true, installed: true, running: true, enabled: !!state.enabled };
   }
-  const stored = await chrome.storage.local.get('overlaySeen');
-  return { installed: !!stored.overlaySeen, running: false, enabled: false };
+  const stored = await chrome.storage.local.get(['overlaySeen', 'lyricsInstallAt', 'lyricsPromptDismissed']);
+  return {
+    supported: true,
+    installed: !!stored.overlaySeen,
+    running: false,
+    enabled: false,
+    installing: !!stored.lyricsInstallAt && Date.now() - stored.lyricsInstallAt < LYRICS_INSTALL_GIVE_UP_MS,
+    askFirst: !stored.lyricsPromptDismissed,
+  };
 }
 
-// スイッチをオンにした時にアプリが動いていなければ、起動を頼んで、動き始めたら表示をオンにする
-let lyricsLaunching = false;
-async function launchLyricsApp() {
-  if (lyricsLaunching) return;
-  lyricsLaunching = true;
-  let tab = null;
-  try {
-    tab = await chrome.tabs.create({ url: 'lyricsoverlay://start' });
-    for (let i = 0; i < 120; i++) {
-      const state = await overlayPost('/state', {}, true);
-      if (state && state.ok) {
-        await overlayPost('/settings', { enabled: true }, true);
-        chrome.storage.local.set({ overlaySeen: true });
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  } finally {
-    lyricsLaunching = false;
-    if (tab) chrome.tabs.remove(tab.id).catch(() => {});
-  }
+// ブラウザの確認に何を押せばいいかを説明するページを開く
+function openLyricsGuide(mode) {
+  return chrome.tabs.create({ url: chrome.runtime.getURL(`lyrics_setup.html?mode=${mode}`) });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return false;
   let work = null;
-  if (message.type === 'lyrics-launch') work = launchLyricsApp().then(() => ({ ok: true }));
+  if (message.type === 'lyrics-close-tab' && sender.tab) work = chrome.tabs.remove(sender.tab.id).then(() => ({ ok: true }));
+  else if (message.type === 'lyrics-guide') work = openLyricsGuide(message.mode).then(() => ({ ok: true }));
+  else if (message.type === 'lyrics-state') work = lyricsSwitchState();
+  else if (message.type === 'lyrics-open-settings') {
+    work = overlayPost('/open-settings', {}, true).then(async (d) => {
+      if (!d) await openLyricsGuide('settings');
+      return { ok: true };
+    });
+  } else if (message.type === 'lyrics-install-mark') work = chrome.storage.local.set({ lyricsInstallAt: Date.now() }).then(() => ({ ok: true }));
+  else if (message.type === 'lyrics-install-cancel') work = chrome.storage.local.remove('lyricsInstallAt').then(() => ({ ok: true }));
+  else if (message.type === 'lyrics-dismiss') work = chrome.storage.local.set({ lyricsPromptDismissed: true }).then(() => ({ ok: true }));
   else if (message.type === 'lyrics-set-enabled') work = overlayPost('/settings', { enabled: !!message.enabled }, true).then((d) => d || { ok: false });
   else if (message.type === 'lyrics-tick' && sender.tab) work = overlayPost('/tick', message.tick).then((d) => d || {});
   else if (message.type === 'lyrics-data' && sender.tab) work = overlayPost('/lyrics', message.lyrics).then(() => ({ ok: true }));

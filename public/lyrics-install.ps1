@@ -16,6 +16,8 @@ if ($env:LYRICS_OVERLAY_UPDATE_BASE) { $loBase = $env:LYRICS_OVERLAY_UPDATE_BASE
 $loRoot = Join-Path $env:LOCALAPPDATA 'LyricsOverlay'
 $loExe = Join-Path $loRoot 'LyricsOverlay.exe'
 $loTmp = Join-Path $env:LOCALAPPDATA 'LyricsOverlay-setup'
+# 拡張機能から裏で実行された時に、失敗の理由を後から確かめられるよう記録する
+try { Start-Transcript -Path (Join-Path $env:LOCALAPPDATA 'LyricsOverlay-install.log') -Force | Out-Null } catch {}
 
 Get-Process -Name 'LyricsOverlay' -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
@@ -59,3 +61,4 @@ Write-Host 'Play a song on music.apple.com in the browser with the Listen Togeth
 Write-Host '拡張機能 Listen Together を入れたブラウザの music.apple.com で曲を流すと、歌詞が表示されます。'
 Write-Host 'Settings: click the icon in the notification area. / 設定は、通知領域のアイコンから開けます。'
 Write-Host ''
+try { Stop-Transcript | Out-Null } catch {}

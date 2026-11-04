@@ -42,6 +42,21 @@ function Update-ListenTogether {
         } catch {}
     }
 
+    # 拡張機能の「インストール」から歌詞アプリを入れられるよう、決まった動きだけをするリンクを登録する。
+    # リンクの中身(%1)はコマンドに渡さない。押されるまで何もインストールしない
+    try {
+        $linkKey = 'HKCU:\Software\Classes\lyricsoverlay-setup'
+        $installUrl = 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1'
+        $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+        $linkCommand = '"' + $conhost + '" --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "irm ' + $installUrl + ' | iex"'
+        New-Item -Path "$linkKey\shell\open\command" -Force | Out-Null
+        Set-ItemProperty -Path $linkKey -Name '(default)' -Value 'Lyrics Overlay Setup'
+        Set-ItemProperty -Path $linkKey -Name 'URL Protocol' -Value ''
+        Set-ItemProperty -Path "$linkKey\shell\open\command" -Name '(default)' -Value $linkCommand
+    } catch {
+        Write-LtLog ('could not register the install link: ' + $_.Exception.Message)
+    }
+
     try {
         New-Item -ItemType Directory -Force -Path $ext | Out-Null
         if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
