@@ -164,6 +164,14 @@
         ])
       );
     }
+    // 届いた曲が、自分のサービスで見つからなかった → 自分で探して流してもらう(その曲を代わりにする)
+    if (ui.findSong) {
+      wrap.appendChild(
+        pill([text(T('notFoundTitle', ui.findSong.title)), text(T('notFoundHint'), 'muted')], [
+          button(T('search'), () => sendAction('find-song'), true),
+        ])
+      );
+    }
     if (ui.needsClick) {
       wrap.appendChild(
         pill([text(T('autoplayBlocked')), text(T('autoplayHint'), 'muted')], [

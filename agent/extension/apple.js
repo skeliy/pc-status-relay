@@ -257,7 +257,28 @@
       } catch (e) {}
     }
     const hit = M().best(list, desc);
-    return hit ? hit.id : null;
+    if (hit) return hit.id;
+    // 見つからなければ、送った人の国のストア(曲名が送った人の言語で書かれている)で探し、
+    // 同じ曲がこの国のストアにあればそれを使う(曲の番号はどの国でも共通。無ければ ISRC で探す)
+    const from = String(desc.cc || '').toLowerCase();
+    if (from && /^[a-z]{2}$/.test(from) && from !== String(sf).toLowerCase()) {
+      try {
+        const d = await api(`/v1/catalog/${from}/search`, { term, types: 'songs', limit: 10 });
+        const there = (d && d.results && d.results.songs && d.results.songs.data) || [];
+        const h2 = M().best(there.map(toCandidate), desc);
+        if (h2) {
+          if (await available(h2.id)) return h2.id;
+          const raw = there.find((x) => x.id === h2.id);
+          const isrc = raw && raw.attributes && raw.attributes.isrc;
+          if (isrc) {
+            const d2 = await api(`/v1/catalog/${sf}/songs`, { 'filter[isrc]': isrc });
+            const mine = (d2 && d2.data) || [];
+            if (mine.length) return mine[0].id;
+          }
+        }
+      } catch (e) {}
+    }
+    return null;
   }
 
   function adjusted(cmd) {
@@ -298,7 +319,19 @@
     return { ok: true };
   }
 
+  // この画面の言語と国(曲名がどの言語で書かれているか。受け取った人が、まずこの言語で探す)
+  function locale() {
+    const m = music();
+    const lang = String(document.documentElement.lang || navigator.language || '').slice(0, 2).toLowerCase() || null;
+    return { lang, cc: m ? String(storefront(m)).toLowerCase() : null };
+  }
+
   function post(kind, payload) {
+    if (kind === 'state' && payload && payload.state) {
+      try {
+        Object.assign(payload.state, locale());
+      } catch (e) {}
+    }
     window.postMessage(Object.assign({ source: SRC_PAGE, kind }, payload), '*');
   }
 

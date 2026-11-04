@@ -172,6 +172,11 @@
   // 検索に使う言葉(届いた名前と別の名前で、重複なく最大 max 個。日本語などの名前を先に)
   function queries(desc, max) {
     const qs = [];
+    // 探し直しの時は、新しく分かった名前(受け取った人の言語での名前)から先に探す
+    for (const n of desc.retry || []) {
+      const q = [n.title, n.artist].filter(Boolean).join(' ');
+      if (q && !qs.includes(q)) qs.push(q);
+    }
     const vs = variants(desc).map((v) => [v.title || desc.title, v.artist || desc.artist].filter(Boolean).join(' ')).filter(Boolean);
     const cjk = (q) => /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(q);
     for (const q of vs.filter(cjk).concat(vs.filter((q) => !cjk(q)))) if (!qs.includes(q)) qs.push(q);

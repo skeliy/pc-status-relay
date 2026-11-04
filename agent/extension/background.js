@@ -32,6 +32,7 @@ let client = null; // この拡張機能の受信箱 { client, key, label, servi
 let loaded = false;
 let passes = {}; // 部屋 -> { room, owner, pass: { nonce, sig } } … パスワードか招待で一度入った部屋の通行証(途中参加に使う)
 const roomStatus = new Map(); // 部屋 -> { open, owner, members, playing, at } … 通行証で確かめた部屋の様子
+let learned = {}; // 見つからなかった曲の代わりに自分で選んだ曲 「サービス|曲名|アーティスト」→ 番号(次からは最初からこの曲を流す)
 let friends = {}; // 一緒に聴いたことのある人の拡張機能の番号 -> { f, s, l } … 友達カード(その人が曲を流している部屋に入れる)
 let friendRooms = []; // 友達が今いる部屋 [{ room, owner, friends, members, playing }]
 const invites = new Map(); // 招待コード -> { room, owner, fromLabel, code, expiresAt, members }
@@ -43,7 +44,12 @@ let notice = null; // { msg: { key, args }, until } 画面に一時的に出す�
 let lang = 'en'; // 画面の言語(初期は英語。アイコンの画面で切り替える)
 const L = (key, ...args) => PcsI18n.t(lang, key, ...args);
 
-const engine = new PcsSync.SyncEngine({ send: (data) => roomSend('state', data), log });
+const engine = new PcsSync.SyncEngine({
+  send: (data) => roomSend('state', data),
+  log,
+  lookupOwnId: (service, song) => learnedId(service, song),
+  onLearn: (service, desc, id) => learnSubstitute(service, desc, id),
+});
 
 function setNotice(key, args, seconds) {
   notice = { msg: { key, args: args || [] }, until: Date.now() + (seconds || 8) * 1000 };
@@ -51,8 +57,9 @@ function setNotice(key, args, seconds) {
 
 async function loadAll() {
   if (loaded) return;
-  const st = await chrome.storage.local.get(['guestCreds', 'client', 'lang', 'passes', 'friends']);
+  const st = await chrome.storage.local.get(['guestCreds', 'client', 'lang', 'passes', 'friends', 'learned']);
   passes = st.passes || {};
+  learned = st.learned || {};
   friends = st.friends || {};
   lang = PcsI18n.norm(st.lang);
   guest = st.guestCreds || null;
@@ -348,6 +355,163 @@ async function hostSelfIfNeeded(state) {
     useCreds(currentCreds());
     log('自分の部屋を開きました', j.room);
   } catch (e) {}
+}
+
+// ---------------------------------------------------------------- 言語の違う曲名
+// 日本のストア・日本語の画面で選ばれた曲は、曲名・アーティスト名が日本語(カタカナ)で届く。受け取った側は
+//   1. まず送った人の言語で探す(YouTube 系は送った人の言語で検索、Apple Music は送った人の国のストアでも探す)
+//   2. 見つからなければ、Apple の公開カタログ(iTunes Search API)で、その曲の「受け取った人の国・言語での名前」を調べて探し直す
+//   3. それでも見つからなければ、「探す」ボタンで自分で探してもらい、流した曲をその曲の代わりにする(覚えておく)
+let myLocale = { lang: null, cc: null, service: null };
+const retried = new Set(); // 調べ直した曲
+
+function nameKey(d) {
+  const n = (x) => String(x || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+  return n(d && d.title) + '|' + n(d && d.artist);
+}
+
+function countryFor(lang, cc) {
+  if (cc && /^[a-z]{2}$/i.test(cc)) return cc.toLowerCase();
+  return { ja: 'jp', ko: 'kr', zh: 'tw', fr: 'fr', de: 'de', es: 'es', pt: 'br', it: 'it' }[lang] || 'us';
+}
+
+async function itunes(path, params) {
+  const u = new URL('https://itunes.apple.com' + path);
+  for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, v);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(u.toString(), { cache: 'no-store', signal: ctrl.signal });
+    if (!r.ok) return [];
+    return (await r.json()).results || [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function looseName(s) {
+  return String(s || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s・·\-‐–—_.,!?'"“”‘’()（）\[\]【】「」『』]/g, '');
+}
+
+function nameScore(a, b) {
+  a = looseName(a);
+  b = looseName(b);
+  if (!a || !b) return 0;
+  if (a === b) return 3;
+  if (a.includes(b) || b.includes(a)) return 2;
+  return 0;
+}
+
+// その曲の、受け取った人の国・言語での名前(と英語の名前)を調べる
+async function namesInMyLanguage(desc) {
+  const fromCc = countryFor(desc.lang, desc.cc);
+  const toCc = countryFor(myLocale.lang, myLocale.cc);
+  const dur = Number(desc.duration) || 0;
+  let list = await itunes('/search', { term: [desc.title, desc.artist].filter(Boolean).join(' '), entity: 'song', country: fromCc, limit: 25 });
+  if (!list.length && desc.title) list = await itunes('/search', { term: desc.title, entity: 'song', country: fromCc, limit: 25 });
+  const ranked = list
+    .filter((x) => nameScore(x.trackName, desc.title) > 0)
+    .map((x) => ({
+      x,
+      s: nameScore(x.trackName, desc.title) * 2 + nameScore(x.artistName, desc.artist) - (dur && x.trackTimeMillis ? Math.min(4, Math.abs(x.trackTimeMillis / 1000 - dur) / 4) : 0),
+    }))
+    .sort((a, b) => b.s - a.s);
+  const hit = ranked[0] && ranked[0].x;
+  if (!hit) return [];
+  const names = [];
+  const seen = new Set([nameKey(desc)]);
+  const add = (x) => {
+    if (!x || !x.trackName) return;
+    const n = { title: x.trackName, artist: x.artistName || '' };
+    if (seen.has(nameKey(n))) return;
+    seen.add(nameKey(n));
+    names.push(n);
+  };
+  // Apple の曲の番号はどの国のストアでも共通なので、受け取った人の国のストアでの名前を直接調べられる
+  const tries = [[toCc, null], [toCc, 'en_us'], [fromCc, 'en_us']];
+  for (const [cc, lang] of tries) {
+    try {
+      add((await itunes('/lookup', { id: hit.trackId, country: cc, lang }))[0]);
+    } catch (e) {}
+  }
+  // 受け取った人の国のストアに同じ番号が無い時は、アーティストと長さで探す
+  if (!names.length) {
+    try {
+      const artist = (names[0] && names[0].artist) || hit.artistName;
+      const near = (await itunes('/search', { term: artist, entity: 'song', country: toCc, limit: 100 })).filter(
+        (x) => x.trackTimeMillis && hit.trackTimeMillis && Math.abs(x.trackTimeMillis - hit.trackTimeMillis) < 1500
+      );
+      if (near.length === 1) add(near[0]);
+    } catch (e) {}
+  }
+  return names;
+}
+
+let retryBusy = false;
+async function retryInMyLanguage() {
+  const sh = engine.shared;
+  if (retryBusy || !engine.notFound || !sh || sh.mine || engine.substitute) return;
+  const key = (myLocale.service || '') + '|' + nameKey(sh.desc);
+  if (retried.has(key)) return;
+  retried.add(key);
+  retryBusy = true;
+  try {
+    const names = await namesInMyLanguage(sh.desc);
+    log('別の名前:', JSON.stringify(names));
+    if (names.length) engine.retryWithAlts(sh.desc, names);
+  } catch (e) {
+    log('別の名前を調べられませんでした', String(e));
+  } finally {
+    retryBusy = false;
+  }
+}
+
+// それでも見つからない時: 「探す」を押すと、自分のサービスの検索画面を開く。そこで流した曲を、その曲の代わりにする
+function findSongUi() {
+  const sh = engine.shared;
+  if (!engine.notFound || !sh || sh.mine || engine.substitute) return null;
+  if (retryBusy || !retried.has((myLocale.service || '') + '|' + nameKey(sh.desc))) return null; // まだ調べ直している
+  return { title: sh.desc.title || '', artist: sh.desc.artist || '' };
+}
+
+function searchUrl(service, q) {
+  const e = encodeURIComponent(q);
+  if (service === 'spotify') return `https://open.spotify.com/search/${e}/tracks`;
+  if (service === 'ytm') return `https://music.youtube.com/search?q=${e}`;
+  if (service === 'youtube') return `https://www.youtube.com/results?search_query=${e}`;
+  return `https://music.apple.com/${countryFor(myLocale.lang, myLocale.cc)}/search?term=${e}`;
+}
+
+async function findSongManually() {
+  const sh = engine.shared;
+  const p = primaryTab();
+  if (!sh || !p || !p.state) return;
+  const alts = (sh.desc.alts || []).filter((n) => n && n.title);
+  const name = alts.length ? alts[alts.length - 1] : sh.desc; // 調べた「自分の言語での名前」があればそちら
+  engine.startSubstitute(180);
+  setNotice('pickSubstitute', [sh.desc.title || ''], 30);
+  try {
+    await chrome.tabs.update(p.id, { url: searchUrl(p.state.service, [name.title, name.artist].filter(Boolean).join(' ')), active: true });
+  } catch (e) {}
+}
+
+function learnedKey(service, d) {
+  return service + '|' + nameKey(d);
+}
+
+function learnedId(service, song) {
+  return learned[learnedKey(service, song)] || (song.isrc && learned[service + '|isrc:' + song.isrc]) || null;
+}
+
+function learnSubstitute(service, desc, id) {
+  learned[learnedKey(service, desc)] = id;
+  if (desc.isrc) learned[service + '|isrc:' + desc.isrc] = id;
+  const keys = Object.keys(learned);
+  if (keys.length > 500) for (const k of keys.slice(0, keys.length - 500)) delete learned[k];
+  chrome.storage.local.set({ learned });
 }
 
 let peekAt = 0;
@@ -731,6 +895,8 @@ async function handleTick(tabId, body) {
   const entry = { id: tabId, at: now, state, lastPlaying: state && state.isPlaying ? now : prev.lastPlaying };
   tabs.set(tabId, entry);
   for (const r of body.results || []) engine.onResult(r);
+  if (state && state.service) myLocale = { lang: state.lang || myLocale.lang, cc: state.cc || myLocale.cc, service: state.service };
+  if (engine.notFound) retryInMyLanguage();
 
   await refreshAgent();
   // PC Status で友達の部屋に入った(Ctrl+Alt+M の許可)→ アイコンなどから入っていた部屋からは出る(同時に2つは入らない)
@@ -776,7 +942,9 @@ function buildUi(isPrimary, state) {
     pending: !!aui.pending,
     hotkey: aui.hotkey || null,
     needsClick: !!(isPrimary && engine.needsClick && room.members.length > 1),
-    notice: (isPrimary && engine.currentNotice()) || n,
+    notice: (isPrimary && !findSongUi() && engine.currentNotice()) || n,
+    findSong: isPrimary ? findSongUi() : null,
+    substituting: !!(isPrimary && engine.substitute),
     loginNeeded: !!(state && state.service === 'spotify' && state.loggedIn === false && creds),
     versionMismatch: !!(a.extVersion && a.extVersion !== MY_VERSION),
   };
@@ -797,6 +965,8 @@ async function handleAction(body) {
     if (!r.ok) setNotice(r.error, [], 8);
   } else if (action === 'decline-invite') {
     await declineInvite(body.code);
+  } else if (action === 'find-song') {
+    await findSongManually();
   } else if (action === 'join-friend') {
     const r = await joinFriend(body.room);
     if (!r.ok) setNotice(r.error, [], 8);

@@ -16,6 +16,7 @@
     "https://music.youtube.com/*",
     "https://www.youtube.com/*",
     "https://pc-status-relay.onrender.com/*",
+    "https://itunes.apple.com/*",
     "http://127.0.0.1/*"
   ],
   "background": {

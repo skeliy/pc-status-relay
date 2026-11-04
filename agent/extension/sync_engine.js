@@ -28,6 +28,8 @@
       this.wallClock = opts.wallClock || (() => Date.now());
       this.send = opts.send || (() => {}); // send(stateData) … みんなに送る
       this.log = opts.log || (() => {});
+      this.lookupOwnId = opts.lookupOwnId || (() => null); // 前に自分で選んで覚えた「代わりの曲」(サービス, 曲) → 番号
+      this.onLearn = opts.onLearn || (() => {}); // 代わりの曲を選んだ時に覚えてもらう
       this.reset();
     }
 
@@ -44,6 +46,8 @@
       this.lastOnShared = null; // 共有の曲を最後に見た時の自分のプレイヤー { id, position, duration, at } (曲が最後まで行って次に変わったかを見分ける)
       this.autoHold = null; // { localId, until } 曲の終わりに勝手に始まった曲を、しばらく送らないでおく
       this.seekSince = null; // 再生位置が共有の状態から飛んでいるのに気付いた時刻
+      this.substitute = null; // { until, desc } 見つからなかった曲の代わりに、聴いている人が自分で選ぶのを待っている
+      this.ourLoads = new Map(); // こちらで流した曲の番号 -> 時刻(遅れて始まった曲を「自分で選んだ曲」と間違えないため)
     }
 
     _expected(snap, t) {
@@ -76,6 +80,7 @@
       let position = Number(data.position) || 0;
       if (playing) position += (ageSec || 0) + LATENCY_COMP_SEC;
       let ownId = this.service && song.ids ? song.ids[this.service] || null : null;
+      if (!ownId && this.service) ownId = this.lookupOwnId(this.service, song) || null; // 前に代わりの曲を選んだ曲
       const snap = { desc: song, ownId, playing, position, at: t, mine: false };
       // 同じ曲の情報なら、こちらで見つけた番号を引き継ぐ
       if (!snap.ownId && this.shared && sameDesc(this.shared.desc, song)) snap.ownId = this.shared.ownId;
@@ -85,6 +90,8 @@
       this.notFound = null;
       this.autoHold = null;
       this.seekSince = null;
+      this.substitute = null;
+      if (this.notice && this.notice.text && this.notice.text.key === 'skipped') this.notice = null; // 前の曲の「見つからなかった」は消す
       this.log(`届いた: ${song.title} / ${song.artist} (${playing ? '再生' : '一時停止'} ${position.toFixed(1)}秒) from ${fromLabel}`);
     }
 
@@ -93,6 +100,7 @@
       const cmd = this.pending[result.id];
       delete this.pending[result.id];
       if (!cmd) return;
+      if (result.resolvedId) this.ourLoads.set(result.resolvedId, this.clock());
       if (result.ok) {
         if (cmd.action === 'load' && result.resolvedId) {
           if (this.target && sameDesc(this.target.desc, cmd.desc)) {
@@ -253,6 +261,8 @@
         isrc: song.isrc || (sameAsShared ? this.shared.desc.isrc : null) || null,
         alt: song.alt || (sameAsShared ? this.shared.desc.alt : null) || null, // 別の言語の曲名・アーティスト名(探す時に使う)
         alts: (song.alts && song.alts.length ? song.alts : sameAsShared ? this.shared.desc.alts : null) || [], // 別の名前ぜんぶ
+        lang: st.lang || null, // 曲名がどの言語で書かれているか(受け取った人は、まずこの言語で探す)
+        cc: st.cc || null, // 送った人の国(Apple Music ならストアの国)
         // localOnly: 自分のライブラリでしか通じない番号(相手には送らず、曲名などで探してもらう)
         ids: song.localOnly ? Object.assign({}, baseIds) : Object.assign({}, baseIds, { [st.service]: song.id }),
       };
@@ -262,6 +272,31 @@
       this.seekSince = null;
       this.log(`送る: ${desc.title} (${st.isPlaying ? '再生' : '一時停止'} ${position.toFixed(1)}秒)`);
       this.send({ song: desc, isPlaying: !!st.isPlaying, position: Math.round(position * 100) / 100 });
+    }
+
+    // 見つからなかった曲を、別の名前(受け取った人の国・言語での名前など)を足して、もう一度探す。探し直す時は true
+    retryWithAlts(desc, alts) {
+      const sh = this.shared;
+      if (!this.notFound || !sh || sh.mine || !sameDesc(sh.desc, desc) || !alts || !alts.length) return false;
+      const key = (n) => norm(n.title) + '|' + norm(n.artist);
+      const have = new Set([key(sh.desc)].concat((sh.desc.alts || []).map(key)));
+      const add = alts.filter((n) => n && (n.title || n.artist) && !have.has(key(n)));
+      if (!add.length) return false;
+      sh.desc = Object.assign({}, sh.desc, { alts: (sh.desc.alts || []).concat(add), retry: add });
+      const t = this.clock();
+      this.notFound = null;
+      this.notice = null;
+      this.target = Object.assign({}, sh, { ownId: null, deadline: t + 25, from: null });
+      this.lastCmd = {};
+      this.log(`別の名前でもう一度探す: ${add.map((n) => n.title + ' / ' + n.artist).join(', ')}`);
+      return true;
+    }
+
+    // 見つからなかった曲の代わりを、聴いている人が自分で探して流すのを待つ(流し始めた曲を、その曲の代わりにする)
+    startSubstitute(seconds) {
+      if (!this.shared || this.shared.mine) return false;
+      this.substitute = { until: this.clock() + (seconds || 180), desc: this.shared.desc, localId: this.notFound ? this.notFound.localId : null };
+      return true;
     }
 
     // だれかが新しく部屋に入ってきた時: 今流れていれば、その人にも流すために送り直す
@@ -274,6 +309,25 @@
     _detect(st, t, opts) {
       const song = st.song;
       if (!song || !song.id) return;
+      const sub = this.substitute;
+      if (sub && t > sub.until) this.substitute = null;
+      if (this.substitute && this.shared && sameDesc(this.shared.desc, sub.desc) && song.id !== sub.localId && song.id !== this.shared.ownId) {
+        // 見つからなかった曲の代わりに、聴いている人が自分で選んだ曲 → みんなには送らず、この曲で同じ位置に合わせる
+        if (!(st.isPlaying && st.phase === PLAYING)) return;
+        this.substitute = null;
+        this.notFound = null;
+        this.notice = null;
+        const sh = this.shared;
+        sh.ownId = song.id;
+        sh.desc = withId(sh.desc, this.service, song.id);
+        this.target = Object.assign({}, sh, { deadline: t + 25, loaded: true, from: null });
+        this.lastCmd = {};
+        this.log(`代わりの曲にする: ${song.title} (${sh.desc.title} の代わり)`);
+        try {
+          this.onLearn(this.service, sh.desc, song.id);
+        } catch (e) {}
+        return [];
+      }
       if (this.notFound) {
         // 届いた曲が見つからなかった後は、自分で別の曲を選ぶまで何も送らない
         if (song.id === this.notFound.localId) return;
@@ -283,6 +337,9 @@
       const sh = this.shared;
       const playing = !!st.isPlaying;
       if (!sh || song.id !== sh.ownId) {
+        // こちらで流した曲が、次の曲が届いた後に遅れて始まっただけ → 送らない(届いた曲に合わせ直す)
+        const ours = this.ourLoads.get(song.id);
+        if (ours != null && t - ours < 30 && sh && !sh.mine) return;
         // 曲が最後まで流れて、自分のプレイヤーが勝手に次の曲(キューの次・おすすめの自動再生)を始めた時。
         // その曲を選んで流していたのが自分でなければ、止めて、みんなには送らない(選んだ人のキューの次の曲に合わせる)
         const hold = this.autoHold;

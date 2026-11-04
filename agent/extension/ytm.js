@@ -71,8 +71,14 @@
   // 「曲」だけに絞った検索(ページの検索と同じ仕組み)
   // 届いた名前と、別の名前(英語・日本語など)のすべてで探して混ぜる
   // (カナダなどの Apple Music では日本の曲がローマ字になるので、日本語の名前でも探す)
-  async function search(desc) {
-    const lists = await Promise.all(M().queries(desc, 3).map((q) => searchOnce(q).catch(() => [])));
+  function senderFirst(desc) {
+    const mine = locale();
+    if (!desc.lang || desc.lang === mine.lang) return [null];
+    return [{ hl: desc.lang, gl: desc.cc ? desc.cc.toUpperCase() : undefined }, null];
+  }
+
+  async function search(desc, loc) {
+    const lists = await Promise.all(M().queries(desc, 3).map((q) => searchOnce(q, loc).catch(() => [])));
     const seen = new Set();
     const out = [];
     for (const c of [].concat(...lists)) {
@@ -83,13 +89,24 @@
     return out;
   }
 
-  async function searchOnce(query) {
+  // loc: 検索結果の言語と国を変える時 { hl, gl }(送った人の言語で探すため)
+  function searchContext(loc) {
+    const ctx = JSON.parse(JSON.stringify(window.ytcfg.get('INNERTUBE_CONTEXT') || {}));
+    if (loc) {
+      ctx.client = ctx.client || {};
+      if (loc.hl) ctx.client.hl = loc.hl;
+      if (loc.gl) ctx.client.gl = loc.gl;
+    }
+    return ctx;
+  }
+
+  async function searchOnce(query, loc) {
     const cfg = window.ytcfg;
     if (!cfg || !cfg.get) throw new Error('ytcfg が見つかりません');
     const resp = await fetch('/youtubei/v1/search?prettyPrint=false&key=' + encodeURIComponent(cfg.get('INNERTUBE_API_KEY')), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ context: cfg.get('INNERTUBE_CONTEXT'), query, params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D' }),
+      body: JSON.stringify({ context: searchContext(loc), query, params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D' }),
     });
     const json = await resp.json();
     const items = [];
@@ -119,8 +136,12 @@
   async function resolve(desc) {
     // YouTube と YouTube Music は動画の番号が共通なので、どちらの番号でもそのまま開ける
     if (desc.ids && (desc.ids.ytm || desc.ids.youtube)) return desc.ids.ytm || desc.ids.youtube;
-    const hit = M().closest(await search(desc), desc); // 長さがいちばん近いもの
-    return hit ? hit.id : null;
+    // まず送った人の言語(画面の言語が違えば、その言語で検索する)、見つからなければ自分の言語で探す
+    for (const loc of senderFirst(desc)) {
+      const hit = M().closest(await search(desc, loc), desc); // 長さがいちばん近いもの
+      if (hit) return hit.id;
+    }
+    return null;
   }
 
   function adjusted(cmd) {
@@ -171,7 +192,20 @@
     return { ok: true };
   }
 
+  // この画面の言語と国(曲名がどの言語で書かれているか。受け取った人が、まずこの言語で探す)
+  function locale() {
+    const cfg = window.ytcfg;
+    const hl = (cfg && cfg.get && cfg.get('HL')) || document.documentElement.lang || '';
+    const gl = (cfg && cfg.get && cfg.get('GL')) || '';
+    return { lang: String(hl).slice(0, 2).toLowerCase() || null, cc: String(gl).toLowerCase() || null };
+  }
+
   function post(kind, payload) {
+    if (kind === 'state' && payload && payload.state) {
+      try {
+        Object.assign(payload.state, locale());
+      } catch (e) {}
+    }
     window.postMessage(Object.assign({ source: SRC_PAGE, kind }, payload), '*');
   }
 

@@ -370,7 +370,19 @@
     return { ok: true };
   }
 
+  // この画面の言語(曲名がどの言語で書かれているか。受け取った人が、まずこの言語で探す)
+  function locale() {
+    const lang = String(document.documentElement.lang || navigator.language || '').slice(0, 2).toLowerCase() || null;
+    const region = String(navigator.language || '').split('-')[1];
+    return { lang, cc: region ? region.toLowerCase() : null };
+  }
+
   function post(kind, payload) {
+    if (kind === 'state' && payload && payload.state) {
+      try {
+        Object.assign(payload.state, locale());
+      } catch (e) {}
+    }
     window.postMessage(Object.assign({ source: SRC_PAGE, kind }, payload), '*');
   }
 
