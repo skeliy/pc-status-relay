@@ -115,7 +115,24 @@
     return artistNames(desc).length > 0 && artistScore(c, desc) < 0.5 && comparable(c, desc);
   }
 
+  // 元の録音がどうしても見つからない時(童謡・民謡など、国によって別の人の録音しか無い曲)の選び方:
+  // アーティストは問わず、曲名が同じもの(別バージョンでないもの)の中から、アーティストが合うもの → 長さが近いもの
+  function looseBest(candidates, desc) {
+    const want = Number(desc.duration) || 0;
+    const ok = [];
+    for (const c of candidates || []) {
+      const t = titleScore(c, desc);
+      if (!(exactTitle(c, desc) || t >= 0.9)) continue;
+      if (otherVersion(c.title, desc.title)) continue;
+      const diff = want && c.duration ? Math.abs(Number(c.duration) - want) : 999;
+      ok.push({ id: c.id, score: t, artist: artistScore(c, desc) >= 0.5 ? 1 : 0, diff, pref: c.preferred ? 1 : 0, candidate: c });
+    }
+    ok.sort((x, y) => y.artist - x.artist || (Math.abs(x.diff - y.diff) > 3 ? x.diff - y.diff : 0) || y.pref - x.pref || y.score - x.score);
+    return ok[0] || null;
+  }
+
   function best(candidates, desc) {
+    if (desc && desc.loose) return looseBest(candidates, desc);
     let top = null;
     for (const c of candidates || []) {
       if (otherArtist(c, desc)) continue;
@@ -134,6 +151,7 @@
   // 曲名とアーティストが合っている候補の中から、長さがいちばん近いものを選ぶ(YouTube などで使う)。
   // 同じ曲でも MV・ライブ・音源で長さが違うので、長さが近いほど位置合わせがずれにくい。
   function closest(candidates, desc) {
+    if (desc && desc.loose) return looseBest(candidates, desc);
     const want = Number(desc.duration) || 0;
     const ok = [];
     for (const c of candidates || []) {

@@ -363,7 +363,7 @@ async function hostSelfIfNeeded(state) {
 //   2. 見つからなければ、Apple の公開カタログ(iTunes Search API)で、その曲の「受け取った人の国・言語での名前」を調べて探し直す
 //   3. それでも見つからなければ、「探す」ボタンで自分で探してもらい、流した曲をその曲の代わりにする(覚えておく)
 let myLocale = { lang: null, cc: null, service: null };
-const retried = new Set(); // 調べ直した曲
+const retried = new Map(); // 調べ直した曲 → どこまで試したか(1: 自分の言語の名前 / 2: 同じ曲名の別の録音)
 
 function nameKey(d) {
   const n = (x) => String(x || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -455,15 +455,24 @@ async function retryInMyLanguage() {
   const sh = engine.shared;
   if (retryBusy || !engine.notFound || !sh || sh.mine || engine.substitute) return;
   const key = (myLocale.service || '') + '|' + nameKey(sh.desc);
-  if (retried.has(key)) return;
-  retried.add(key);
+  const stage = retried.get(key) || 0;
+  if (stage >= 2) return;
   retryBusy = true;
   try {
-    const names = await namesInMyLanguage(sh.desc);
-    log('別の名前:', JSON.stringify(names));
-    if (names.length) engine.retryWithAlts(sh.desc, names);
-  } catch (e) {
-    log('別の名前を調べられませんでした', String(e));
+    if (stage === 0) {
+      retried.set(key, 1);
+      let names = [];
+      try {
+        names = await namesInMyLanguage(sh.desc);
+        log('別の名前:', JSON.stringify(names));
+      } catch (e) {
+        log('別の名前を調べられませんでした', String(e));
+      }
+      if (names.length && engine.retryWithAlts(sh.desc, names)) return;
+    }
+    // 自分の言語の名前でも見つからない → 同じ曲名の別の録音を探す
+    retried.set(key, 2);
+    engine.retryLoose(sh.desc);
   } finally {
     retryBusy = false;
   }
@@ -473,7 +482,7 @@ async function retryInMyLanguage() {
 function findSongUi() {
   const sh = engine.shared;
   if (!engine.notFound || !sh || sh.mine || engine.substitute) return null;
-  if (retryBusy || !retried.has((myLocale.service || '') + '|' + nameKey(sh.desc))) return null; // まだ調べ直している
+  if (retryBusy || (retried.get((myLocale.service || '') + '|' + nameKey(sh.desc)) || 0) < 2) return null; // まだ調べ直している
   return { title: sh.desc.title || '', artist: sh.desc.artist || '' };
 }
 

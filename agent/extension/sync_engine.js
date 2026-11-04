@@ -107,6 +107,7 @@
             this.target.ownId = result.resolvedId;
             this.target.loaded = true; // こちらで曲を流し終えた(この後に曲が変わったら、聴いている人が自分で選んだ曲)
           }
+          if (cmd.desc && cmd.desc.loose) this._setNotice({ key: 'otherRecording', args: [cmd.desc.title || null] }, 12);
           if (this.shared && sameDesc(this.shared.desc, cmd.desc)) {
             this.shared.ownId = result.resolvedId;
             this.shared.desc = withId(this.shared.desc, this.service, result.resolvedId);
@@ -296,6 +297,20 @@
       this.target = Object.assign({}, sh, { ownId: null, deadline: t + 25, from: null });
       this.lastCmd = {};
       this.log(`別の名前でもう一度探す: ${add.map((n) => n.title + ' / ' + n.artist).join(', ')}`);
+      return true;
+    }
+
+    // それでも見つからない時: アーティストを問わず、同じ曲名の別の録音を探す(童謡など、国によって別の人の録音しか無い曲)
+    retryLoose(desc) {
+      const sh = this.shared;
+      if (!this.notFound || !sh || sh.mine || !sameDesc(sh.desc, desc) || sh.desc.loose) return false;
+      sh.desc = Object.assign({}, sh.desc, { loose: true, retry: undefined });
+      const t = this.clock();
+      this.notFound = null;
+      this.notice = null;
+      this.target = Object.assign({}, sh, { ownId: null, deadline: t + 25, from: null });
+      this.lastCmd = {};
+      this.log(`同じ曲名の別の録音を探す: ${sh.desc.title}`);
       return true;
     }
 

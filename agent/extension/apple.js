@@ -304,6 +304,18 @@
         }
       } catch (e) {}
     }
+    // この国のストアの検索結果が、ローマ字など送った人と違う書き方の時は、その曲の「送った人の国のストアでの名前」を
+    // 調べて比べ直す(曲の番号はどの国でも共通なので、同じ番号で名前だけ取り直せる)
+    const senderSf = from && /^[a-z]{2}$/.test(from) ? from : desc.lang === 'ja' ? 'jp' : null;
+    if (senderSf && senderSf !== String(sf).toLowerCase() && list.length) {
+      try {
+        const ids = Array.from(new Set(list.map((c) => String(c.id)))).slice(0, 15);
+        const d = await api(`/v1/catalog/${senderSf}/songs`, { ids: ids.join(',') });
+        const named = ((d && d.data) || []).filter((x) => ids.includes(String(x.id)));
+        const h3 = M().best(named.map(toCandidate), desc);
+        if (h3 && (await available(h3.id))) return h3.id;
+      } catch (e) {}
+    }
     return null;
   }
 
