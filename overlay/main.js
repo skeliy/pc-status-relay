@@ -12,7 +12,7 @@ const vm = require('vm');
 
 const PORT = 8789;
 const UPDATE_BASE = process.env.LYRICS_OVERLAY_UPDATE_BASE || 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/overlay';
-const UPDATE_EVERY_MS = 2 * 60 * 60 * 1000;
+const UPDATE_EVERY_MS = 30 * 60 * 1000;
 const RETRY_NO_LYRICS_MS = 30 * 60 * 1000;
 const RETRY_ERROR_MS = 30 * 1000;
 const ASK_TIMEOUT_MS = 15 * 1000;
@@ -292,8 +292,10 @@ function startServer() {
       if (req.url === '/tick') return reply(200, handleTick(body));
       if (req.url === '/state') return reply(200, { ok: true, enabled: settings.enabled });
       if (req.url === '/open-settings') {
-        openSettings();
-        return reply(200, { ok: true });
+        // 窓を作るのに時間がかかっても拡張機能を待たせないよう、先に返事をする
+        reply(200, { ok: true });
+        setImmediate(openSettings);
+        return undefined;
       }
       if (req.url === '/settings') {
         if (typeof body.enabled !== 'boolean') return reply(400, { ok: false });

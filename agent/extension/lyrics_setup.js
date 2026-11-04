@@ -5,12 +5,15 @@
   const STUCK_MS = 3 * 60 * 1000; // インストールが進まないとみなすまでの時間
   const NOT_STARTING_MS = 12 * 1000; // 起動しないとみなすまでの時間
 
-  const mode = LINKS[new URLSearchParams(location.search).get('mode')] ? new URLSearchParams(location.search).get('mode') : 'install';
+  const params = new URLSearchParams(location.search);
+  const mode = LINKS[params.get('mode')] ? params.get('mode') : 'install';
+  const reinstalling = params.get('force') === '1'; // アプリが動いたまま入れ直す時は、いったん止まるのを待つ
   const $ = (id) => document.getElementById(id);
   const send = (msg) => new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(chrome.runtime.lastError ? null : r)));
   const closeTab = () => send({ type: 'lyrics-close-tab' });
   const startedAt = Date.now();
   let finished = false;
+  let sawStopped = false;
 
   function fillText(lang) {
     const T = (k) => PcsI18n.t(lang, k);
@@ -37,6 +40,10 @@
       doneTitle: T('guideDoneTitle'),
       doneBody: T('guideDoneBody'),
       doneClose: T('guideCancel'),
+      oldTitle: T('guideOldTitle'),
+      oldBody: T('guideOldBody'),
+      oldUpdate: T('guideOldUpdate'),
+      oldClose: T('guideCancel'),
     };
     for (const [id, text] of Object.entries(texts)) $(id).textContent = text;
     $('working').textContent = install ? T('guideWorking') : '';
@@ -60,7 +67,14 @@
       await send({ type: 'lyrics-set-enabled', enabled: true });
       return closeTab();
     }
-    if (mode === 'settings') return closeTab();
+    if (mode === 'settings') {
+      const opened = await send({ type: 'lyrics-try-settings' });
+      if (opened && opened.ok) return closeTab();
+      // 古い版のアプリは、拡張機能から設定画面を開けない。黙って閉じずに、更新を案内する
+      $('guide').hidden = true;
+      $('oldApp').hidden = false;
+      return undefined;
+    }
     $('guide').hidden = true;
     $('done').hidden = false;
   }
@@ -68,7 +82,8 @@
   async function poll() {
     if (finished) return;
     const state = await send({ type: 'lyrics-state' });
-    if (state && state.running) return onStarted();
+    if (state && !state.running) sawStopped = true;
+    if (state && state.running && (!reinstalling || sawStopped)) return onStarted();
     const waited = Date.now() - startedAt;
     if (mode === 'install') $('stuckBox').hidden = waited < STUCK_MS;
     else $('reinstallBox').hidden = waited < NOT_STARTING_MS;
@@ -81,14 +96,17 @@
     closeTab();
   });
   $('doneClose').addEventListener('click', closeTab);
-  $('reinstall').addEventListener('click', () => {
-    location.href = chrome.runtime.getURL('lyrics_setup.html?mode=install');
-  });
+  const reinstall = () => {
+    location.href = chrome.runtime.getURL('lyrics_setup.html?mode=install&force=1');
+  };
+  $('reinstall').addEventListener('click', reinstall);
+  $('oldUpdate').addEventListener('click', reinstall);
+  $('oldClose').addEventListener('click', closeTab);
 
   chrome.storage.local.get('lang', async (stored) => {
     fillText(PcsI18n.norm(stored && stored.lang));
     const state = await send({ type: 'lyrics-state' });
-    if (state && state.running) return onStarted();
+    if (state && state.running && !reinstalling) return onStarted();
     if (mode === 'install') await send({ type: 'lyrics-install-mark' });
     askBrowser();
     poll();

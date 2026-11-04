@@ -1165,6 +1165,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'lyrics-close-tab' && sender.tab) work = chrome.tabs.remove(sender.tab.id).then(() => ({ ok: true }));
   else if (message.type === 'lyrics-guide') work = openLyricsGuide(message.mode).then(() => ({ ok: true }));
   else if (message.type === 'lyrics-state') work = lyricsSwitchState();
+  else if (message.type === 'lyrics-try-settings') work = overlayPost('/open-settings', {}, true).then((d) => d || { ok: false });
   else if (message.type === 'lyrics-open-settings') {
     work = overlayPost('/open-settings', {}, true).then(async (d) => {
       if (!d) await openLyricsGuide('settings');
