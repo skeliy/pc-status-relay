@@ -137,6 +137,32 @@
     return ok;
   }
 
+  // その曲(キューの1曲)を表す番号ぜんぶ(カタログの番号・ライブラリの番号)
+  function itemIds(item) {
+    if (!item) return [];
+    const out = new Set();
+    try {
+      const info = catalogInfo(item);
+      if (info.id) out.add(String(info.id));
+      if (info.libId) {
+        out.add(String(info.libId));
+        const cat = libCache.get(info.libId);
+        if (cat) out.add(String(cat));
+      }
+    } catch (e) {}
+    if (item.id) out.add(String(item.id));
+    return Array.from(out);
+  }
+
+  function queueIndexOf(m, id) {
+    try {
+      const q = m.queue;
+      const items = (q && q.items) || [];
+      for (let i = 0; i < items.length; i++) if (itemIds(items[i]).includes(String(id))) return i;
+    } catch (e) {}
+    return -1;
+  }
+
   function readState() {
     const m = music();
     if (!m) return { available: false, service: SERVICE };
@@ -294,8 +320,23 @@
       let id = cmd.songId && (await available(cmd.songId)) ? cmd.songId : await resolve(cmd.desc || {});
       if (!id) return { ok: false, error: 'notfound', localId: before.song ? before.song.id : null };
       const kind = cmd.desc && cmd.desc.kind === 'musicVideo' ? 'musicVideo' : 'song';
-      const r = await withTimeout(m.setQueue({ [kind]: id }), 8000);
-      if (r === '__timeout') return { ok: false, error: 'setQueue timeout' };
+      // もう流れている曲なら入れ直さない。キューの中にあれば、その曲へ移る(setQueue はキューを全部入れ替えてしまうので、
+      // プレイリストやライブラリから流していた人の「次に流れる曲」が消えてしまう)
+      const nowIds = itemIds(m.nowPlayingItem);
+      if (nowIds.includes(String(id))) {
+        // そのまま(位置と再生/停止だけ合わせる)
+      } else {
+        const idx = queueIndexOf(m, id);
+        let moved = false;
+        if (idx >= 0 && typeof m.changeToMediaAtIndex === 'function') {
+          const r0 = await withTimeout(m.changeToMediaAtIndex(idx), 8000);
+          moved = r0 !== '__timeout' && itemIds(m.nowPlayingItem).includes(String(id));
+        }
+        if (!moved) {
+          const r = await withTimeout(m.setQueue({ [kind]: id }), 8000);
+          if (r === '__timeout') return { ok: false, error: 'setQueue timeout' };
+        }
+      }
       if (cmd.play) {
         // play() が返ってこないことがある(自動再生を止められた時など)ので、時間で区切って確かめる
         await withTimeout(m.play(), 4000);

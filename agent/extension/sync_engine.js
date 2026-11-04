@@ -195,6 +195,13 @@
       } else {
         tg.loadingSince = null;
       }
+      // 届いた曲が、もう自分のところで流れている曲と同じ(曲名の書き方が少し違うだけ)なら、入れ直さない
+      // (入れ直すと Apple Music などでは、その人のキュー=次に流れる曲がすべて消えてしまう)
+      if (localId && localId !== tg.ownId && looseSame(tg.desc, st.song)) {
+        tg.ownId = localId;
+        tg.loaded = true;
+        if (this.shared && sameDesc(this.shared.desc, tg.desc)) this.shared.ownId = localId;
+      }
       if (!tg.ownId || localId !== tg.ownId) {
         // 曲を探して流す(探すのに時間がかかることがあるので、少し長めに待ってから出し直す)
         // 前に出した「曲を流す」の結果がまだ来ていなければ待つ(探すのに時間がかかる Spotify などで、二重に流さないため)
@@ -404,13 +411,37 @@
     return norm(a.title) === norm(b.title) && norm(a.artist) === norm(b.artist);
   }
 
+  // 曲名の書き方が少し違っても同じ曲か(「(Official Audio)」などの付け足し・大文字小文字・記号を無視し、長さも見る)
+  function baseTitle(s) {
+    return norm(s)
+      .replace(/\s*[(\[（【][^)\]）】]*[)\]）】]/g, '')
+      .replace(/\s+-\s+.*$/, '')
+      .replace(/[\s・·'"’“”.,!?_-]/g, '');
+  }
+
+  function looseSame(desc, song) {
+    if (!desc || !song) return false;
+    if (sameDesc(desc, { ids: song.id ? { _local: song.id } : {}, isrc: song.isrc, title: song.title, artist: song.artist })) return true;
+    const names = [desc].concat(desc.alts || [], desc.alt ? [desc.alt] : []);
+    const st = baseTitle(song.title);
+    if (!st || !names.some((n) => baseTitle(n.title) === st)) return false;
+    const a = Number(desc.duration) || 0;
+    const b = Number(song.duration) || 0;
+    if (a && b) return Math.abs(a - b) <= 3;
+    const sa = norm(song.artist);
+    return names.some((n) => {
+      const na = norm(n.artist);
+      return na && sa && (na.includes(sa) || sa.includes(na));
+    });
+  }
+
   function withId(desc, service, id) {
     const ids = Object.assign({}, desc.ids || {});
     if (service && id) ids[service] = id;
     return Object.assign({}, desc, { ids });
   }
 
-  const api = { SyncEngine, sameDesc };
+  const api = { SyncEngine, sameDesc, looseSame };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PcsSync = api;
 })(typeof self !== 'undefined' ? self : this);
