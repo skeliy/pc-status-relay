@@ -61,6 +61,44 @@
     return el('section', {}, [title ? el('h2', { text: title }) : null, ...children]);
   }
 
+  const UPDATE_CMDS = {
+    win: 'Start-ScheduledTask -TaskName ListenTogetherUpdater',
+    mac: 'launchctl kickstart -k gui/$(id -u)/com.skeliy.listentogether.updater',
+  };
+
+  function copyButton(textToCopy) {
+    const b = el('button', { class: 'copy', text: T('copy') });
+    b.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        b.textContent = T('copied');
+        setTimeout(() => (b.textContent = T('copy')), 1800);
+      } catch (e) {}
+    });
+    return b;
+  }
+
+  let folderTimer = null;
+  function updateSection(up) {
+    const parts = [el('div', { class: 'name', text: T('updateAvailable', up.latest, up.current) })];
+    if (up.install === 'agent') {
+      parts.push(el('div', { class: 'muted small', text: T('updateAgent') }));
+    } else {
+      const cmd = UPDATE_CMDS[up.os] || UPDATE_CMDS.win;
+      parts.push(el('div', { class: 'muted small', text: T('updateAuto') }));
+      parts.push(el('div', { class: 'cmd' }, [el('code', { text: cmd }), copyButton(cmd)]));
+      parts.push(el('div', { class: 'muted small', text: up.os === 'mac' ? T('updateWhereMac') : T('updateWhereWin') }));
+      parts.push(el('div', { class: 'muted small', text: T('updateReloads') }));
+      if (up.install !== 'command') {
+        parts.push(el('div', { class: 'muted small', text: T('updateZip') }));
+        parts.push(el('a', { class: 'link', href: up.zipUrl, target: '_blank', text: T('download') }));
+      }
+      // 画面を開いている間は、新しい版が入ったかを3秒ごとに確かめる(入ったら拡張機能が読み込み直す)
+      if (!folderTimer) folderTimer = setInterval(() => send({ type: 'check-folder' }), 3000);
+    }
+    return el('section', { class: 'update' }, parts);
+  }
+
   function render(data) {
     app.textContent = '';
     if (!data) {
@@ -74,6 +112,13 @@
       applyLang();
     }
     const room = ui.room;
+
+    // 新しい版(アイコンの画面を開くたびに確かめる)
+    const up = data.update;
+    const verEl = document.getElementById('ver');
+    verEl.classList.toggle('new', !!(up && up.available));
+    verEl.title = up && up.latest && !up.available ? T('upToDate') : '';
+    if (up && up.available) app.appendChild(updateSection(up));
 
     if (ui.notice) app.appendChild(section(null, [el('div', { class: 'notice', text: PcsI18n.fmt(lang, ui.notice) })]));
 

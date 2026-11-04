@@ -324,6 +324,7 @@ Chrome・Brave・Edge で使えます(Firefox は非対応)。
 - **Discord のリンクから来た人(Windows)**: 参加ページに出るコマンド `irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex` を PowerShell に貼り付けて実行し、表示されたフォルダ(`%LOCALAPPDATA%\ListenTogether`。場所はクリップボードにコピーされる)を同じ手順で読み込みます。
   - コマンドは、拡張機能を GitHub(このリポジトリの `agent/extension`)からダウンロードし、タスクスケジューラに「ListenTogetherUpdater」というタスクを登録します。このタスクが2時間ごとに `public/listen-update.ps1` を GitHub から取ってきて実行し、新しい版があればフォルダの中身を入れ替えます。拡張機能はそれに気付いて、自分で読み込み直します(一緒に聴いている最中は、終わってから読み込み直します)。管理者の権限はいりません。
   - やめる時は、拡張機能ページで削除してから `irm https://pc-status-relay.onrender.com/listen-uninstall.ps1 | iex` を実行します(タスクとフォルダが消えます)。
+  - 拡張機能アイコンを押した画面を開くたびに、新しい版があるかを確かめます。あれば画面の上に「新しい版があります」と、今すぐ入れるためのコマンド(Windows: `Start-ScheduledTask -TaskName ListenTogetherUpdater`、Mac: `launchctl kickstart -k gui/$(id -u)/com.skeliy.listentogether.updater`。コピーボタン付き)が出ます。実行して新しい版が入ると、拡張機能が自分で読み込み直します(画面を開いたままでも3秒ごとに確かめます)。
   - 更新の記録は `%LOCALAPPDATA%\ListenTogether\update.log` に残ります。前の版で `ListenTogether\extension` に入れた人は、そのフォルダが引き続き更新されます。
 - **Discord のリンクから来た人(Mac)**: 参加ページの入れ方の上にある「Mac」のタブを押し、出てくるコマンド `curl -fsSL https://pc-status-relay.onrender.com/listen-install.sh | bash` をターミナルに貼り付けて実行します。拡張機能ページの「パッケージ化されていない拡張機能を読み込む」を押したら、`Cmd+Shift+G` → `Cmd+V` → `Return` → 「選択」で、表示されたフォルダ(`~/Library/Application Support/ListenTogether`。場所はクリップボードにコピーされる)を読み込みます。
   - コマンドは Windows と同じく GitHub から拡張機能をダウンロードし、launchd(Mac の自動実行)に `com.skeliy.listentogether.updater` を登録します。ログインしている間、2時間ごとに `public/listen-update.sh` を GitHub から取ってきて実行し、新しい版があればフォルダの中身を入れ替えます。管理者の権限はいりません。

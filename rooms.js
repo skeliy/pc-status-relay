@@ -152,6 +152,8 @@ function friendSet(auth, data) {
       if (safeEqual(c.s, friendSig(me, c.f))) set.add(c.f);
     }
   }
+  // 一緒に聴いたことのある人を覚えておく(中継サーバーが再起動して部屋の「前に参加した人」が消えても、🎧 の招待を届けるため)
+  auth.rec.friendIds = Array.from(set).slice(0, 300);
   const a = data.agent;
   if (a && typeof a.pc === 'string' && typeof a.sig === 'string' && a.sig.length <= 60 && safeEqual(a.sig, agentSig(a.pc))) {
     auth.rec.agentPc = a.pc.slice(0, 64);
@@ -954,7 +956,18 @@ function handle(req, res, parsedUrl, ctx) {
       // target: known の key / 'all'(前に入った人全員) / 'clients'(そのうち拡張機能だけの人)
       let targets;
       if (data.target === 'all') targets = knownList(room).map((k) => k.key);
-      else if (data.target === 'clients') targets = knownList(room).filter((k) => k.kind === 'client').map((k) => k.key);
+      else if (data.target === 'clients') {
+        targets = knownList(room).filter((k) => k.kind === 'client').map((k) => k.key);
+        // 部屋の中の人と一緒に聴いたことのある、拡張機能だけの人(今ブラウザを開いている人)にも届ける
+        const inside = new Set(Array.from(room.members.values()).map(viewerOf).filter(Boolean));
+        for (const [cid, c] of Object.entries(clients)) {
+          if (inside.has(cid) || c.agentPc || now - c.lastSeen > CLIENT_ONLINE_MS) continue;
+          if (!(c.friendIds || []).some((f) => inside.has(f))) continue;
+          const key = 'c:' + cid;
+          if (!room.known.has(key)) room.known.set(key, { key, kind: 'client', id: cid, label: c.label || 'guest', service: c.service, lastAt: now });
+          if (!targets.includes(key)) targets.push(key);
+        }
+      }
       else targets = [String(data.target || '')];
       const invited = [];
       for (const key of targets) {

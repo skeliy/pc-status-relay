@@ -111,6 +111,7 @@ class MusicSync:
         self.own_members = []
         self.own_host = True  # 自分の部屋のホストが自分か(ほかの人が先に開いていれば False)
         self.own_owner = self.pc_label  # 自分の部屋のホストの名前
+        self._invited_clients = []
         self.agent_card = None  # 拡張機能に渡す「仲間カード」(PC Status の仲間どうしは、最初から一緒に聴ける友達)
         self.joined = None  # 友達の部屋に入っている時 {"id", "token", "owner", "session"}
         self.joined_members = []
@@ -192,7 +193,9 @@ class MusicSync:
             if result is None:
                 self.notifier.toast("中継サーバーに繋がらなかったため、リクエストを送れませんでした")
             elif delivered == 0:
-                self.notifier.toast("リクエストを送れる相手が見つかりませんでした(相手のPCが新しいバージョンで動いていない可能性があります)")
+                time.sleep(1.5)  # 拡張機能だけの人への招待の結果を待つ
+                if not self._invited_clients:
+                    self.notifier.toast("リクエストを送れる相手が見つかりませんでした(友達の PC が起動していないか、ブラウザを開いていない可能性があります)")
             else:
                 names = "、".join(r.get("label") or r.get("id") for r in result.get("recipients", []))
                 self.notifier.toast(f"{names} に「一緒に聴く」をリクエストしました。許可を待っています…")
@@ -203,12 +206,14 @@ class MusicSync:
         threading.Thread(target=self._invite_known_clients, daemon=True).start()
 
     def _invite_known_clients(self):
+        self._invited_clients = []
         with self.lock:
             token = self.own_token
         if not token:
             return
         r = self._room_post("invite", {"room": self.room_id, "token": token, "target": "clients"})
-        names = "、".join(x.get("label", "") for x in (r or {}).get("invited", []) if x.get("label"))
+        self._invited_clients = [x for x in (r or {}).get("invited", []) if x.get("label")]
+        names = "、".join(x.get("label", "") for x in self._invited_clients)
         if names:
             self.notifier.toast(f"前に参加した {names} にも招待を送りました")
 
@@ -422,6 +427,8 @@ class MusicSync:
             host = result.get("host", True)
             owner = result.get("owner") or self.pc_label
             with self.lock:
+                if self.own_token and self.own_token != result["token"]:
+                    self.own_members = []  # 中継サーバーが再起動して入り直した(前の自分を「出ました」と知らせないように)
                 if self.own_token != result["token"] or self.own_host != host:
                     if host:
                         _log(f"部屋「{self.room_id}」を開きました" + ("(パスワードで参加できます)" if self.password else ""))
@@ -497,6 +504,7 @@ class MusicSync:
                     elif r and r.get("__status") in (403, 404):
                         with self.lock:
                             self.own_token = None  # 中継サーバーが再起動した → 開き直す
+                            self.own_members = []  # 前の自分を「出ました」と知らせないように
             except Exception as e:
                 _log(f"部屋の確認でエラー: {e}")
             time.sleep(MEMBERS_CHECK_SEC)

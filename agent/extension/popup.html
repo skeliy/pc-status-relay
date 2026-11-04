@@ -28,6 +28,14 @@
   input, select { width: 100%; padding: 6px 8px; border-radius: 8px; border:1px solid var(--line); background:#151722; color:var(--text); font: inherit; margin-top: 4px; }
   label { display:block; color: var(--muted); font-size: 12px; margin-top: 6px; }
   .notice { color: #ffd479; font-size: 12px; }
+  .update { background: rgba(59,130,246,.10); border-bottom: 1px solid rgba(59,130,246,.45); }
+  .update > div { margin-bottom: 6px; }
+  .update .name { font-weight: 700; font-size: 13px; }
+  .update .cmd { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; border-radius: 9px; background: rgba(0,0,0,.25); border: 1px solid var(--line); }
+  .update .cmd code { flex: 1; min-width: 0; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; word-break: break-all; }
+  .update .copy { flex: none; padding: 4px 10px; font-size: 12px; }
+  .update .link { color: #93c5fd; font-size: 12px; }
+  .ver.new { color: #93c5fd; font-weight: 700; }
   ol { margin: 0; padding-left: 1.2em; }
   .lang { position: relative; }
   .lang-btn { display:flex; align-items:center; gap:5px; height:26px; padding:0 8px; border:1px solid var(--line); border-radius:999px; background:transparent; color:var(--muted); font-size:11px; font-weight:600; }

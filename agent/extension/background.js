@@ -674,6 +674,49 @@ async function checkOwnFolder() {
   } catch (e) {}
 }
 
+// 新しい版があるか(アイコンの画面を開くたびに確かめる)。中継サーバーが配っている版 = GitHub の最新
+let latest = { version: null, at: 0 };
+async function checkLatest(force) {
+  if (!force && Date.now() - latest.at < 30000) return latest;
+  try {
+    const r = await fetch(`${RELAY}/api/room/info?room=-`, { cache: 'no-store' });
+    const j = await r.json();
+    if (j.extVersion) latest = { version: j.extVersion, at: Date.now() };
+  } catch (e) {}
+  return latest;
+}
+
+function versionLess(a, b) {
+  const pa = String(a || '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '').split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+  return false;
+}
+
+// どうやって入れたか: 'agent'(PC Status)/ 'command'(コマンドで入れた。更新係がいる)/ 'unknown'(zip かもしれない)
+async function installType() {
+  if (agent.data) return 'agent';
+  try {
+    const r = await fetch(chrome.runtime.getURL('update.log'), { cache: 'no-store' });
+    if (r.ok) return 'command';
+  } catch (e) {}
+  return 'unknown';
+}
+
+async function updateInfo() {
+  await checkOwnFolder(); // 更新係がもう新しい版を入れていれば、ここで読み込み直す
+  const lt = await Promise.race([checkLatest(true), new Promise((r) => setTimeout(() => r(latest), 2500))]);
+  const plat = String((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+  return {
+    current: MY_VERSION,
+    latest: lt.version,
+    available: !!(lt.version && versionLess(MY_VERSION, lt.version)),
+    install: await installType(),
+    os: /mac/i.test(plat) ? 'mac' : 'win',
+    zipUrl: `${RELAY}/listen-ext.zip`,
+  };
+}
+
 async function postAgent(path, body) {
   const resp = await fetch(AGENT_URL + path, {
     method: 'POST',
@@ -1048,6 +1091,7 @@ async function popupState() {
   }
   return {
     version: MY_VERSION,
+    update: await updateInfo(),
     rooms,
     client: client ? { label: client.label, service: client.service } : null,
     hasAgent: !!agent.data,
@@ -1063,6 +1107,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'action') work = handleAction(message.body || {}).then((d) => ({ ok: true, data: d }));
   else if (message.type === 'guest-join') work = handleGuestJoin(message.creds, sender);
   else if (message.type === 'popup-state') work = popupState().then((d) => ({ ok: true, data: d }));
+  else if (message.type === 'check-folder') work = checkOwnFolder().then(() => ({ ok: true }));
   else if (message.type === 'set-profile')
     work = registerClient({ label: message.label, service: message.service }).then(() => ({ ok: true }));
   else if (message.type === 'offscreen-get-client') work = loadAll().then(() => client);
