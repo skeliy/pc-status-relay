@@ -203,6 +203,17 @@ async function openServiceIfNeeded(service) {
   return true;
 }
 
+// 名前とサービスを保存する。部屋に入っている最中にサービスを変えたら、選んだサービスのタブへ切り替える
+async function saveProfile({ label, service }) {
+  await registerClient({ label, service });
+  if (!guest || !client || client.service !== service || guest.service === service) return;
+  guest = Object.assign({}, guest, { service });
+  await chrome.storage.local.set({ guestCreds: guest });
+  useCreds(currentCreds());
+  if (room.creds && room.creds.mode === 'guest') room.creds.service = service;
+  await openServiceIfNeeded(service);
+}
+
 // 拡張機能だけで入っている時は、自分で選んだサービスのタブを優先して使う
 function preferredService() {
   const c = room.creds;
@@ -1183,8 +1194,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'guest-join') work = handleGuestJoin(message.creds, sender);
   else if (message.type === 'popup-state') work = popupState().then((d) => ({ ok: true, data: d }));
   else if (message.type === 'check-folder') work = checkOwnFolder().then(() => ({ ok: true }));
-  else if (message.type === 'set-profile')
-    work = registerClient({ label: message.label, service: message.service }).then(() => ({ ok: true }));
+  else if (message.type === 'set-profile') work = saveProfile(message).then(() => ({ ok: true }));
   else if (message.type === 'offscreen-get-client') work = loadAll().then(() => client);
   else if (message.type === 'client-invalid') work = registerClient().then(() => ({ ok: true }));
   else if (message.type === 'inbox') work = handleInbox(message.messages).then(() => ({ ok: true }));

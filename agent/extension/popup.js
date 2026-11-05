@@ -316,25 +316,23 @@
     // 歌詞オーバーレイ
     if (data.lyrics && data.lyrics.supported) app.appendChild(lyricsSection(data));
 
-    // 自分の名前とサービス(拡張機能だけの人)
-    if (!data.hasAgent) {
-      const name = el('input', { type: 'text', maxlength: '40', value: (data.client && data.client.label) || '' });
-      const svc = el('select', {}, Object.entries(SERVICE_NAMES).filter(([k]) => k !== 'none').map(([k, v]) => {
-        const o = el('option', { value: k, text: v });
-        if (data.client && data.client.service === k) o.selected = true;
-        return o;
-      }));
-      const save = el('button', {
-        text: T('save'),
-        onclick: async () => {
-          save.disabled = true;
-          await send({ type: 'set-profile', label: name.value.trim(), service: svc.value });
-          save.textContent = T('saved');
-          setTimeout(refresh, 600);
-        },
-      });
-      app.appendChild(section(T('yourSettings'), [el('label', { text: T('nameLabel') }), name, el('label', { text: T('serviceLabel') }), svc, el('div', { class: 'row' }, [save])]));
-    }
+    // 自分の名前とサービス。同じPCでエージェントが動いていても、ブラウザのプロフィールごとに変えられるようにする
+    const name = el('input', { type: 'text', maxlength: '40', value: (data.client && data.client.label) || '' });
+    const svc = el('select', {}, Object.entries(SERVICE_NAMES).filter(([k]) => k !== 'none').map(([k, v]) => {
+      const o = el('option', { value: k, text: v });
+      if (data.client && data.client.service === k) o.selected = true;
+      return o;
+    }));
+    const save = el('button', {
+      text: T('save'),
+      onclick: async () => {
+        save.disabled = true;
+        await send({ type: 'set-profile', label: name.value.trim(), service: svc.value });
+        save.textContent = T('saved');
+        setTimeout(refresh, 600);
+      },
+    });
+    app.appendChild(section(T('yourSettings'), [el('label', { text: T('nameLabel') }), name, el('label', { text: T('serviceLabel') }), svc, el('div', { class: 'row' }, [save])]));
   }
 
   async function refresh(force) {
