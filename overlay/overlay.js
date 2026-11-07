@@ -1,6 +1,6 @@
 // 透明なウィンドウの中で歌詞を描く部分。マウスやキーボードの操作は受け取らない。
 (function () {
-  const { parseTTML, topIndex, progress, Clock } = window.LyricsCore;
+  const { parseTTML, parseLRC, topIndex, progress, Clock } = window.LyricsCore;
   const root = document.getElementById('root');
   const stack = document.getElementById('stack');
   const clock = new Clock();
@@ -261,10 +261,10 @@
     if (song && song.id === tick.id) startLoop();
   });
 
-  window.overlayApi.onLyrics(({ id, ttml }) => {
+  window.overlayApi.onLyrics(({ id, ttml, lrc, duration }) => {
     if (preview && song && song.id === 'preview') return;
     if (song && song.id === id) return;
-    setSong(id, ttml ? parseTTML(ttml) : null);
+    setSong(id, ttml ? parseTTML(ttml) : lrc ? parseLRC(lrc, duration) : null);
   });
 
   window.overlayApi.onSettings(applySettings);

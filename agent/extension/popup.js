@@ -118,10 +118,10 @@
       ]);
     }
 
-    // まだ入っていない人には、はじめに一度だけ確認を出す(Apple Music 以外を使っている人には、スイッチを押すまで出さない)
+    // まだ入っていない人には、はじめに一度だけ確認を出す(Apple Music と Spotify 以外を使っている人には、スイッチを押すまで出さない)
     if (!lyr.installed) {
       const service = data.client && data.client.service;
-      if (lyricsAsking === null) lyricsAsking = lyr.askFirst && (!service || service === 'apple');
+      if (lyricsAsking === null) lyricsAsking = lyr.askFirst && (!service || service === 'apple' || service === 'spotify');
       if (lyricsAsking) {
         return section(null, [
           el('div', { class: 'name', text: T('lyricsAskTitle') }),

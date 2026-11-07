@@ -57,8 +57,8 @@ Start-Process -FilePath $loExe -ArgumentList '--settings'
 
 Write-Host ''
 Write-Host 'Done! / 完了しました' -ForegroundColor Green
-Write-Host 'Play a song on music.apple.com in the browser with the Listen Together extension.'
-Write-Host '拡張機能 Listen Together を入れたブラウザの music.apple.com で曲を流すと、歌詞が表示されます。'
+Write-Host 'Play a song on Apple Music or Spotify in the browser with the Listen Together extension.'
+Write-Host '拡張機能 Listen Together を入れたブラウザの Apple Music か Spotify で曲を流すと、歌詞が表示されます。'
 Write-Host 'Settings: click the icon in the notification area. / 設定は、通知領域のアイコンから開けます。'
 Write-Host ''
 try { Stop-Transcript | Out-Null } catch {}

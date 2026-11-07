@@ -1,6 +1,7 @@
-// Apple Music(music.apple.com)のページの中で動く、歌詞オーバーレイ用の部品。
+// Apple Music(music.apple.com)と Spotify(open.spotify.com)のページの中で動く、歌詞オーバーレイ用の部品。
 //  - 今の曲と、再生している秒数を 0.25 秒ごとに知らせる
-//  - オーバーレイが「この曲の歌詞がほしい」と言った時だけ、その人の Apple Music のログインで歌詞を取ってくる
+//  - Apple Music では、オーバーレイが「この曲の歌詞がほしい」と言った時だけ、その人の Apple Music のログインで歌詞を取ってくる
+//  - Spotify の歌詞は、オーバーレイのアプリが公開の歌詞の図書館(LRCLIB)から自分で取る
 // オーバーレイを入れていない人のPCでは、歌詞を取りに行くことはない。
 // 歌詞を取る仕組みは Apple が公開しているものではないので、変更されると動かなくなることがある。
 (function () {
@@ -36,29 +37,36 @@
     window.postMessage(Object.assign({ source: SRC_PAGE, kind }, body), '*');
   }
 
+  // Apple Music と Spotify のページで、今の曲と再生している秒数を知らせる
   function tick() {
-    const m = music();
     const adapter = window.__pcsAdapter;
-    if (!m || !adapter || adapter.service !== 'apple' || !adapter.readState) return;
+    if (!adapter || !adapter.readState || !['apple', 'spotify'].includes(adapter.service)) return;
+    const service = adapter.service;
+    const m = service === 'apple' ? music() : null;
+    if (service === 'apple' && !m) return;
     let state = null;
     try {
       state = adapter.readState();
     } catch (e) {
       return;
     }
-    const song = state && state.song;
+    if (!state || state.phase === 'loading') return; // 曲が変わった直後で、位置がまだ前の曲のまま
+    const song = state.song;
     if (!song || !song.id) {
-      post('tick', { tick: { id: null, playing: false, at: Date.now() } });
+      post('tick', { tick: { service, id: null, playing: false, at: Date.now() } });
       return;
     }
     post('tick', {
       tick: {
-        id: song.localOnly ? null : String(song.id),
+        service,
+        // Apple Music では、カタログに無い自分の曲(番号で歌詞を探せない)は送らない
+        id: service === 'apple' && song.localOnly ? null : String(song.id),
         title: song.title || '',
         artist: song.artist || '',
+        album: song.album || '',
         duration: Number(song.duration) || 0,
         playing: !!state.isPlaying,
-        pos: position(m),
+        pos: service === 'apple' ? position(m) : Number(state.position) || 0,
         at: Date.now(),
       },
     });
@@ -105,7 +113,7 @@
   function onMessage(e) {
     if (e.source !== window || !e.data || e.data.source !== SRC_CMD) return;
     const id = e.data.need;
-    if (!id || !/^\d+$/.test(String(id)) || asked.has(id)) return;
+    if (!id || !/^\d+$/.test(String(id)) || asked.has(id) || !music()) return;
     asked.add(id);
     if (asked.size > 200) asked.clear();
     fetchLyrics(id)

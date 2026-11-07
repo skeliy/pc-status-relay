@@ -358,15 +358,16 @@ Chrome・Brave・Edge で使えます(Firefox は非対応)。
 
 ---
 
-## 6. 歌詞オーバーレイ(Apple Music)
+## 6. 歌詞オーバーレイ(Apple Music・Spotify)
 
-ブラウザ版の Apple Music で流している曲の歌詞を、画面の上に文字だけで表示する別のアプリです(`overlay` フォルダ)。背景は透明で、マウスの操作はすべて下の画面に通り抜けます。
+ブラウザ版の Apple Music か Spotify で流している曲の歌詞を、画面の上に文字だけで表示する別のアプリです(`overlay` フォルダ)。背景は透明で、マウスの操作はすべて下の画面に通り抜けます。
 
 - 入れ方: 拡張機能のアイコンを押すと出る確認で「インストール」を押します。開いた案内のページのとおりにブラウザの確認で「開く」を押すと、裏で Electron(約160MB)をダウンロードして `%LOCALAPPDATA%\LyricsOverlay` に入れ、終わると設定画面が開きます。始まらない時は、同じ場所に出るコマンド `irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1 | iex` を PowerShell で実行します。記録は `%LOCALAPPDATA%\LyricsOverlay-install.log` に残ります。
 - インストールのリンク: `lyricsoverlay-setup://` は、拡張機能の更新係(`listen-update.ps1`)とエージェント(`agent.py`)が登録します。リンクの中身は使わず、決まったインストールだけを実行します。
 - 設定: 拡張機能のスイッチの左にある歯車か、通知領域のアイコンから、透明度・文字の大きさ・位置・歌詞のタイミングを変えられます。
 - 更新: アプリが2時間ごとに `overlay/VERSION` を確かめ、新しければ自分で更新します(歌詞を表示している間は更新しません)。ファイルを増やしたら `overlay/FILES` に書き足します。
 - やめる時: `irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-uninstall.ps1 | iex`
+- Spotify の歌詞: Spotify の歌詞は Spotify の非公開の仕組みでしか取れず、その利用は Spotify の規約で認められていないので使いません。代わりに、アプリが公開の歌詞の図書館 [LRCLIB](https://lrclib.net) から、曲名・アーティスト・アルバム・曲の長さで探します。LRCLIB の歌詞は行ごとの時間しか無いので、Spotify では行ごとに光ります。見つからない曲もあります。
 - 仕組み: `lyrics.js`(ページの中)→ `lyrics_relay.js` → `background.js` → `http://127.0.0.1:8789`(アプリ)の順に再生位置を送ります。アプリが歌詞を求めた時だけ、その人の Apple Music のログインで歌詞を取得します。歌詞はメモリの中にだけ置き、中継サーバーには送りません。Apple が公開していない取得方法なので、変更されると動かなくなることがあります。
 
 ## セキュリティ上の注意

@@ -11,6 +11,8 @@ const path = require('path');
 const vm = require('vm');
 
 const PORT = 8789;
+const LRCLIB = process.env.LYRICS_OVERLAY_LRCLIB_BASE || 'https://lrclib.net';
+const LRCLIB_DURATION_SLACK = 4; // 曲の長さがこれ以上違う歌詞は、別の版として使わない
 const UPDATE_BASE = process.env.LYRICS_OVERLAY_UPDATE_BASE || 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/overlay';
 const UPDATE_EVERY_MS = 30 * 60 * 1000;
 const RETRY_NO_LYRICS_MS = 30 * 60 * 1000;
@@ -180,15 +182,26 @@ function syncWindowVisibility() {
 }
 
 // ---- 拡張機能との連絡 ----
+// 曲の見分け方: Apple Music はカタログの番号、Spotify は曲の番号(分からなければ曲名とアーティスト)
+function songKey(service, rawId) {
+  if (typeof rawId !== 'string') return null;
+  if (service === 'apple') return /^\d{1,20}$/.test(rawId) ? rawId : null;
+  if (service === 'spotify') return /^(?:[A-Za-z0-9]{22}|meta:.{1,600})$/s.test(rawId) ? 'sp:' + rawId.slice(0, 300) : null;
+  return null;
+}
+
 function validTick(body) {
   if (!body || typeof body !== 'object') return null;
-  const id = typeof body.id === 'string' && /^\d{1,20}$/.test(body.id) ? body.id : null;
+  const service = body.service === 'spotify' ? 'spotify' : 'apple'; // 古い拡張機能は service を送らない(Apple Music だけ)
+  const id = songKey(service, body.id);
   const pos = Number(body.pos);
   const at = Number(body.at);
   return {
     id,
+    service,
     title: String(body.title || '').slice(0, 300),
     artist: String(body.artist || '').slice(0, 300),
+    album: String(body.album || '').slice(0, 300),
     duration: Number(body.duration) || 0,
     playing: body.playing === true,
     pos: Number.isFinite(pos) && pos >= 0 ? pos : 0,
@@ -214,17 +227,102 @@ function shouldAsk(id) {
 
 function pushLyrics(id) {
   const cached = lyricsCache.get(id);
-  sendOverlay('lyrics', { id, ttml: cached && cached.status === 'ok' ? cached.ttml : null });
+  const ok = cached && cached.status === 'ok';
+  sendOverlay('lyrics', {
+    id,
+    ttml: ok ? cached.ttml || null : null,
+    lrc: ok ? cached.lrc || null : null,
+    duration: lastTick && lastTick.id === id ? lastTick.duration : 0,
+  });
+}
+
+function storeLyrics(id, entry) {
+  lyricsCache.set(id, Object.assign({ at: Date.now() }, entry));
+  asking.delete(id);
+  while (lyricsCache.size > MAX_CACHED_SONGS) lyricsCache.delete(lyricsCache.keys().next().value);
+  if (id === currentId) pushLyrics(id);
+  updateStatus();
+}
+
+// ---- Spotify の歌詞: 公開されている歌詞の図書館 LRCLIB から取る ----
+// (Spotify の歌詞は、Spotify が使ってはいけないとしている非公開の仕組みでしか取れないため)
+function cleanTitle(title) {
+  return String(title || '')
+    .replace(/\s*[([](?:feat\.?|ft\.?|with)\s[^)\]]*[)\]]/gi, '')
+    .replace(/\s+-\s+.*\b(?:remaster(?:ed)?|version|edit|mix|live|mono|stereo|from)\b.*$/i, '')
+    .trim();
+}
+
+async function lrclibGet(pathname, params) {
+  const url = new URL(pathname, LRCLIB);
+  for (const [k, v] of Object.entries(params)) if (v !== '' && v != null) url.searchParams.set(k, String(v));
+  const version = (() => {
+    try {
+      return fs.readFileSync(path.join(__dirname, 'VERSION'), 'utf8').trim();
+    } catch (e) {
+      return '0';
+    }
+  })();
+  const res = await fetch(url, {
+    headers: { 'User-Agent': `LyricsOverlay/${version} (https://github.com/skeliy/pc-status-relay)` },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`LRCLIB ${res.status}`);
+  return res.json();
+}
+
+function bestLrclib(list, duration) {
+  let best = null;
+  for (const x of Array.isArray(list) ? list : [list]) {
+    if (!x || x.instrumental || typeof x.syncedLyrics !== 'string' || !x.syncedLyrics.trim()) continue;
+    const diff = duration && x.duration ? Math.abs(Number(x.duration) - duration) : 0;
+    if (diff > LRCLIB_DURATION_SLACK) continue;
+    if (!best || diff < best.diff) best = { diff, lrc: x.syncedLyrics };
+  }
+  return best && best.lrc;
+}
+
+async function fetchLrclib(tick) {
+  const artist = tick.artist.split(/\s*,\s*/)[0] || tick.artist;
+  const title = cleanTitle(tick.title) || tick.title;
+  const duration = Math.round(tick.duration || 0);
+  let sawInstrumental = false;
+  const tries = [];
+  if (tick.album && duration) tries.push(['/api/get', { track_name: tick.title, artist_name: tick.artist, album_name: tick.album, duration }]);
+  tries.push(['/api/search', { track_name: tick.title, artist_name: artist }]);
+  if (title !== tick.title) tries.push(['/api/search', { track_name: title, artist_name: artist }]);
+  tries.push(['/api/search', { q: `${title} ${artist}` }]);
+  for (const [pathname, params] of tries) {
+    const found = await lrclibGet(pathname, params);
+    if (found && !Array.isArray(found) && found.instrumental) sawInstrumental = true;
+    const lrc = bestLrclib(found, tick.duration);
+    if (lrc) return { status: 'ok', lrc, kind: 'lrclib' };
+  }
+  return { status: 'none', kind: 'lrclib', instrumental: sawInstrumental };
+}
+
+function askLrclib(tick) {
+  fetchLrclib(tick)
+    .catch((e) => {
+      console.error('lyrics lookup failed:', e.message);
+      return { status: 'error', kind: 'lrclib' };
+    })
+    .then((r) => storeLyrics(tick.id, r));
 }
 
 function describeStatus() {
   const t = lastTick;
-  if (!t || !t.id) return T('Apple Music を待っています', 'Waiting for Apple Music');
+  if (!t || !t.id) return T('曲を待っています(Apple Music か Spotify)', 'Waiting for a song (Apple Music or Spotify)');
   const name = t.title ? `${t.title}${t.artist ? ' — ' + t.artist : ''}` : '';
   const cached = lyricsCache.get(t.id);
   let note = T('歌詞を取得しています', 'Fetching lyrics');
-  if (cached && cached.status === 'ok') note = cached.kind === 'lyrics' ? T('行ごとの歌詞', 'Line-synced lyrics') : T('単語ごとの歌詞', 'Word-synced lyrics');
-  else if (cached && cached.status === 'none') note = T('この曲の歌詞はありません', 'No lyrics for this song');
+  if (cached && cached.status === 'ok') {
+    if (cached.kind === 'lrclib') note = T('行ごとの歌詞(LRCLIB)', 'Line-synced lyrics (LRCLIB)');
+    else note = cached.kind === 'lyrics' ? T('行ごとの歌詞', 'Line-synced lyrics') : T('単語ごとの歌詞', 'Word-synced lyrics');
+  } else if (cached && cached.status === 'none') {
+    note = cached.instrumental ? T('この曲は歌のない曲です', 'This song has no vocals') : cached.kind === 'lrclib' ? T('この曲の時間付きの歌詞が見つかりません', 'No synced lyrics found for this song') : T('この曲の歌詞はありません', 'No lyrics for this song');
+  }
   else if (cached && cached.status === 'denied') note = T('歌詞を取得できません(ログインを確認)', 'Could not get lyrics (check sign-in)');
   else if (cached) note = T('歌詞を取得できませんでした', 'Could not get lyrics');
   return `${note}: ${name}`.slice(0, 120);
@@ -247,20 +345,23 @@ function handleTick(body) {
   lastTick = tick;
   if (changed && tick.id && lyricsCache.has(tick.id)) pushLyrics(tick.id);
   sendOverlay('tick', tick);
-  const need = shouldAsk(tick.id) ? tick.id : null;
+  if (!shouldAsk(tick.id)) {
+    updateStatus();
+    return { ok: true };
+  }
   updateStatus();
-  return need ? { ok: true, need } : { ok: true };
+  if (tick.service === 'spotify') {
+    askLrclib(tick);
+    return { ok: true };
+  }
+  return { ok: true, need: tick.id }; // Apple Music の歌詞は、その人のログインでブラウザに取ってもらう
 }
 
 function handleLyrics(body) {
   if (!body || typeof body.id !== 'string' || !/^\d{1,20}$/.test(body.id)) return { ok: false };
   const ok = body.status === 'ok' && typeof body.ttml === 'string' && body.ttml.length > 0;
   const status = ok ? 'ok' : ['none', 'denied'].includes(body.status) ? body.status : 'error';
-  lyricsCache.set(body.id, { status, ttml: ok ? body.ttml : null, kind: body.kind === 'lyrics' ? 'lyrics' : 'syllable-lyrics', at: Date.now() });
-  asking.delete(body.id);
-  while (lyricsCache.size > MAX_CACHED_SONGS) lyricsCache.delete(lyricsCache.keys().next().value);
-  if (body.id === currentId) pushLyrics(body.id);
-  updateStatus();
+  storeLyrics(body.id, { status, ttml: ok ? body.ttml : null, kind: body.kind === 'lyrics' ? 'lyrics' : 'syllable-lyrics' });
   return { ok: true };
 }
 

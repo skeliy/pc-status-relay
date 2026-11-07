@@ -99,6 +99,42 @@
     return { lines, wordTimed: lines.some((l) => l.words) };
   }
 
+  // LRC(行ごとの時間だけが付いた歌詞)を、TTML と同じ形にする。時間の付いた行が無ければ null
+  const MAX_LINE_SECONDS = 10; // 次の行まで長く空いている時(間奏など)は、ここで区切る
+  function parseLRC(text, duration) {
+    if (!text || typeof text !== 'string') return null;
+    let offset = 0;
+    const stamps = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const off = raw.match(/^\s*\[offset:\s*([+-]?\d+)\s*\]/i);
+      if (off) {
+        offset = Number(off[1]) / 1000;
+        continue;
+      }
+      const times = [];
+      let rest = raw;
+      let m;
+      while ((m = rest.match(/^\s*\[(\d+):(\d{1,2}(?:[.:]\d{1,3})?)\]/))) {
+        times.push(Number(m[1]) * 60 + parseFloat(m[2].replace(':', '.')));
+        rest = rest.slice(m[0].length);
+      }
+      if (!times.length) continue;
+      const line = rest.replace(/<\d+:\d{1,2}(?:[.:]\d{1,3})?>/g, '').replace(/\s+/g, ' ').trim();
+      for (const t of times) stamps.push({ t: Math.max(0, t - offset), text: line });
+    }
+    stamps.sort((a, b) => a.t - b.t);
+    const lines = [];
+    for (let i = 0; i < stamps.length; i++) {
+      const s = stamps[i];
+      if (!s.text) continue; // 空の行は「ここで歌が切れる」という印
+      const next = i + 1 < stamps.length ? stamps[i + 1].t : duration > s.t ? duration : s.t + 5;
+      const end = Math.min(next, s.t + MAX_LINE_SECONDS);
+      if (end <= s.t) continue;
+      lines.push({ begin: s.t, end, text: s.text, words: null, bg: null, alt: false });
+    }
+    return lines.length ? { lines, wordTimed: false } : null;
+  }
+
   const LINE_HOLD = 0.15; // 歌い終わってから、次の行へ移るまでの秒数
 
   // 画面の一番上に出す行。今歌っている行か、まだ始まっていない次の行
@@ -136,7 +172,7 @@
     }
   }
 
-  const api = { parseTime, parseTTML, topIndex, progress, Clock };
+  const api = { parseTime, parseTTML, parseLRC, topIndex, progress, Clock };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.LyricsCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);

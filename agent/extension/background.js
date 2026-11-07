@@ -20,7 +20,7 @@ const SERVICE_URLS = { apple: 'https://music.apple.com/', spotify: 'https://open
 const MUSIC_URL_PATTERNS = ['https://music.apple.com/*', 'https://open.spotify.com/*', 'https://music.youtube.com/*', 'https://www.youtube.com/*'];
 const SITE_SCRIPTS = [
   { match: 'https://music.apple.com/*', main: ['match.js', 'apple.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
-  { match: 'https://open.spotify.com/*', main: ['match.js', 'spotify.js'] },
+  { match: 'https://open.spotify.com/*', main: ['match.js', 'spotify.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
   { match: 'https://music.youtube.com/*', main: ['match.js', 'ytm.js'] },
   { match: 'https://www.youtube.com/*', main: ['match.js', 'youtube.js'] },
 ];
@@ -1186,7 +1186,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'lyrics-install-cancel') work = chrome.storage.local.remove('lyricsInstallAt').then(() => ({ ok: true }));
   else if (message.type === 'lyrics-dismiss') work = chrome.storage.local.set({ lyricsPromptDismissed: true }).then(() => ({ ok: true }));
   else if (message.type === 'lyrics-set-enabled') work = overlayPost('/settings', { enabled: !!message.enabled }, true).then((d) => d || { ok: false });
-  else if (message.type === 'lyrics-tick' && sender.tab) work = overlayPost('/tick', message.tick).then((d) => d || {});
+  else if (message.type === 'lyrics-tick' && sender.tab) {
+    // Apple Music と Spotify の両方が開いている時は、今聴いているほう(一緒に聴く時と同じタブ)だけを送る
+    const p = primaryTab();
+    work = p && p.id !== sender.tab.id ? Promise.resolve({}) : overlayPost('/tick', message.tick).then((d) => d || {});
+  }
   else if (message.type === 'lyrics-data' && sender.tab) work = overlayPost('/lyrics', message.lyrics).then(() => ({ ok: true }));
   if (work) { /* 歌詞オーバーレイの連絡 */ }
   else if (message.type === 'tick' && sender.tab) work = handleTick(sender.tab.id, message.body || {}).then((d) => ({ ok: true, data: d }));
