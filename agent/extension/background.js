@@ -25,7 +25,39 @@ const SITE_SCRIPTS = [
   { match: 'https://www.youtube.com/*', main: ['match.js', 'youtube.js'] },
 ];
 
-const log = (...a) => console.log('[一緒に聴く]', ...a);
+// 調べる時のために、最近の記録を残しておく(アイコンの画面の「デバッグ情報をコピー」で取り出せる)。
+// 裏方が止められても消えないよう、ブラウザを閉じるまでは chrome.storage.session にも入れておく
+const debugLines = [];
+let debugDirty = false;
+function fmtArg(a) {
+  if (typeof a === 'string') return a;
+  try {
+    return JSON.stringify(a);
+  } catch (e) {
+    return String(a);
+  }
+}
+const log = (...a) => {
+  console.log('[一緒に聴く]', ...a);
+  const d = new Date();
+  const ts = d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  debugLines.push(ts + ' ' + a.map(fmtArg).join(' ').slice(0, 600));
+  if (debugLines.length > 600) debugLines.splice(0, debugLines.length - 600);
+  debugDirty = true;
+};
+(async () => {
+  try {
+    const st = await chrome.storage.session.get('debugLines');
+    if (st && Array.isArray(st.debugLines)) debugLines.unshift(...st.debugLines.slice(-500), '--- (拡張機能の裏方が起動し直した) ---');
+  } catch (e) {}
+})();
+setInterval(() => {
+  if (!debugDirty) return;
+  debugDirty = false;
+  try {
+    chrome.storage.session.set({ debugLines: debugLines.slice(-600) });
+  } catch (e) {}
+}, 3000);
 const tabs = new Map(); // tabId -> { at, state, lastPlaying }
 let guest = null; // 参加ページ・招待で入った部屋 { relay, room, token, label, service, owner }
 let client = null; // この拡張機能の受信箱 { client, key, label, service }
@@ -915,6 +947,45 @@ async function endSelfRoom() {
   useCreds(currentCreds());
 }
 
+// 調べるための情報(鍵・パスワード・通行証は入れない)
+async function debugInfo() {
+  await loadAll();
+  const p = primaryTab();
+  const st = (p && p.state) || {};
+  const song = st.song || null;
+  const c = room.creds;
+  const sh = engine.shared;
+  const tg = engine.target;
+  const descOf = (d) => (d ? { title: d.title, artist: d.artist, duration: d.duration, isrc: d.isrc, ids: d.ids, lang: d.lang, cc: d.cc, alts: (d.alts || []).length, loose: !!d.loose } : null);
+  const info = {
+    time: new Date().toString(),
+    extension: MY_VERSION,
+    browser: navigator.userAgent,
+    agent: agent.data ? { connected: true, room: agent.data.room ? { id: agent.data.room.id, role: agent.data.room.role } : null, extVersion: agent.data.extVersion } : null,
+    me: client ? { label: client.label, service: client.service } : null,
+    room: c ? { id: c.id, mode: c.mode, role: c.role, owner: room.owner, connected: room.connected, host: room.host === room.you } : null,
+    members: (room.members || []).map((m) => `${m.label} (${m.service || '?'})${m.host ? ' host' : ''}`),
+    musicTabs: Array.from(tabs.values()).map((t) => ({ service: t.state && t.state.service, playing: !!(t.state && t.state.isPlaying), primary: p ? t === p : false })),
+    player: {
+      service: st.service,
+      phase: st.phase,
+      isPlaying: !!st.isPlaying,
+      position: st.position,
+      lang: st.lang,
+      cc: st.cc,
+      loggedIn: st.loggedIn,
+      song: song ? { title: song.title, artist: song.artist, id: song.id, duration: song.duration, localOnly: !!song.localOnly } : null,
+    },
+    shared: sh ? { desc: descOf(sh.desc), ownId: sh.ownId, playing: sh.playing, mine: !!sh.mine } : null,
+    target: tg ? { desc: descOf(tg.desc), ownId: tg.ownId, loaded: !!tg.loaded } : null,
+    notFound: engine.notFound ? { title: engine.notFound.title } : null,
+    waitingForNext: !!engine.autoHold,
+    substitute: !!engine.substitute,
+    notice: engine.currentNotice() || null,
+  };
+  return '=== Listen Together debug ===\n' + JSON.stringify(info, null, 2) + '\n\n=== log (latest last) ===\n' + debugLines.join('\n');
+}
+
 // ---------------------------------------------------------------- タブ
 function primaryTab() {
   const now = Date.now();
@@ -957,7 +1028,13 @@ async function handleTick(tabId, body) {
   const prev = tabs.get(tabId) || {};
   const entry = { id: tabId, at: now, state, lastPlaying: state && state.isPlaying ? now : prev.lastPlaying };
   tabs.set(tabId, entry);
-  for (const r of body.results || []) engine.onResult(r);
+  for (const r of body.results || []) {
+    const cmd = engine.pending[r.id];
+    if (cmd && (!r.ok || cmd.action === 'load')) {
+      log('結果:', cmd.action, cmd.desc ? `${cmd.desc.title} / ${cmd.desc.artist}` : '', r.ok ? 'ok' : 'NG', r.error || '', r.resolvedId ? 'id=' + r.resolvedId : '');
+    }
+    engine.onResult(r);
+  }
   if (state && state.service) myLocale = { lang: state.lang || myLocale.lang, cc: state.cc || myLocale.cc, service: state.service };
   if (engine.notFound) retryInMyLanguage();
 
@@ -1038,10 +1115,21 @@ async function handleAction(body) {
   } else if (action === 'rejoin' || action === 'host') {
     const r = await hostRoom(body.room);
     if (!r.ok) setNotice(r.error, [], 8);
+  } else if (action === 'stop' && room.creds && room.creds.role === 'owner' && !agent.data) {
+    // PC Status にすぐ繋がらない時も「終了」が効くよう、中継サーバーに直接送る(部屋の鍵はこちらにもある)
+    const r = await roomPost('end', {});
+    log('終了ボタン(中継サーバーに直接):', r && r.ok ? 'ok' : JSON.stringify(r));
   } else if (['request', 'cancel', 'stop', 'accept', 'decline'].includes(action) && agent.data) {
+    if (action === 'stop') log('終了ボタン', room.creds ? `${room.creds.id} (${room.creds.role})` : '');
     try {
       await postAgent('/ext/action', { action, sessionId: body.sessionId });
-    } catch (e) {}
+    } catch (e) {
+      // PC Status に繋がらなかった → 「終了」だけは中継サーバーに直接送る
+      if (action === 'stop' && room.creds && room.creds.role === 'owner') {
+        const r = await roomPost('end', {});
+        log('終了ボタン(PC Status に繋がらないので中継サーバーに直接):', r && r.ok ? 'ok' : JSON.stringify(r));
+      }
+    }
     agent.okAt = 0;
     await refreshAgent();
     useCreds(currentCreds());
@@ -1197,6 +1285,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'action') work = handleAction(message.body || {}).then((d) => ({ ok: true, data: d }));
   else if (message.type === 'guest-join') work = handleGuestJoin(message.creds, sender);
   else if (message.type === 'popup-state') work = popupState().then((d) => ({ ok: true, data: d }));
+  else if (message.type === 'debug-info') work = debugInfo().then((text) => ({ ok: true, text }));
   else if (message.type === 'check-folder') work = checkOwnFolder().then(() => ({ ok: true }));
   else if (message.type === 'set-profile') work = saveProfile(message).then(() => ({ ok: true }));
   else if (message.type === 'offscreen-get-client') work = loadAll().then(() => client);

@@ -333,6 +333,21 @@
       },
     });
     app.appendChild(section(T('yourSettings'), [el('label', { text: T('nameLabel') }), name, el('label', { text: T('serviceLabel') }), svc, el('div', { class: 'row' }, [save])]));
+
+    // うまく動かない時に送ってもらう情報(最近の記録と今の状態。鍵やパスワードは入らない)
+    const dbg = el('button', { text: T('copyDebug') });
+    const dbgNote = el('div', { class: 'muted small' });
+    dbg.addEventListener('click', async () => {
+      const r = await send({ type: 'debug-info' });
+      if (!r || !r.ok) return;
+      try {
+        await navigator.clipboard.writeText(r.text);
+        dbgNote.textContent = T('copyDebugDone');
+      } catch (e) {
+        dbgNote.textContent = '';
+      }
+    });
+    app.appendChild(section(null, [el('div', { class: 'row' }, [dbg]), dbgNote]));
   }
 
   async function refresh(force) {

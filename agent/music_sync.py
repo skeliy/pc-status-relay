@@ -52,8 +52,20 @@ MEMBERS_CHECK_SEC = 4
 ROOM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 
+LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "listen_together.log")
+
+
 def _log(msg):
-    print(f"[一緒に聴く] {msg}", flush=True)
+    line = f"[一緒に聴く] {msg}"
+    print(line, flush=True)
+    # 調べる時のために、ファイルにも残す(大きくなったら古いほうを消す)
+    try:
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 512 * 1024:
+            os.replace(LOG_PATH, LOG_PATH + ".old")
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
+    except Exception:
+        pass
 
 
 def relay_base_url(server_url):
@@ -239,8 +251,17 @@ class MusicSync:
             if notify:
                 self.notifier.toast(f"{joined['owner']} の部屋から退出しました")
             return
-        if has_others and own_token:
-            self._room_post("end", {"room": self.room_id, "token": own_token})
+        if own_token:
+            # 部屋の人の一覧(4秒ごとに取り直している)が古くても終了できるよう、人がいるかどうかに関係なく終了を送る
+            r = self._room_post("end", {"room": self.room_id, "token": own_token})
+            _log(f"終了ボタン: {'終了しました' if r and r.get('ok') else '終了できませんでした ' + str(r)} (一覧上の人: {has_others})")
+            if not (r and r.get("ok")):
+                # 中継サーバーが再起動していた → 部屋を開き直してから、もう一度送る
+                self.open_room()
+                with self.lock:
+                    own_token = self.own_token
+                if own_token:
+                    r = self._room_post("end", {"room": self.room_id, "token": own_token})
             with self.lock:
                 self.own_members = [m for m in self.own_members if m.get("kind") == "owner"]
             if notify:
