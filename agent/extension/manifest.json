@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Listen Together",
-  "version": "3.10.0",
+  "version": "3.10.1",
   "description": "Listen to the same song at the same time with friends on the web players of Apple Music, Spotify, YouTube Music and YouTube, even across different services.",
   "permissions": [
     "scripting",
