@@ -324,9 +324,43 @@
     return Math.max(0, (cmd.position || 0) + elapsed);
   }
 
+  // 今開いているプレイリストを「新しく追加した曲 → 古い曲」の逆順でキューに入れて流す
+  //   ライブラリ: /jp/library/playlist/p.XXXX   カタログ: /jp/playlist/名前/pl.XXXX
+  async function reversePlaylist(mk) {
+    const pm = location.pathname.match(/\/playlist\/(?:[^/]+\/)?((?:p|pl)\.[^/?#]+)/);
+    if (!pm) return { ok: false, error: 'not-playlist' };
+    const id = pm[1];
+    const isLibrary = id.startsWith('p.');
+    if (isLibrary && !mk.isAuthorized) return { ok: false, error: 'login' };
+    const path = isLibrary ? `/v1/me/library/playlists/${id}/tracks` : `/v1/catalog/${mk.storefrontId}/playlists/${id}/tracks`;
+    // 100 曲ずつ全曲を取ってくる
+    const tracks = [];
+    for (let offset = 0; offset < 10000; offset += 100) {
+      const res = await mk.api.music(path, { limit: 100, offset });
+      const page = (res && res.data && res.data.data) || [];
+      tracks.push(...page);
+      if (!(res && res.data && res.data.next) || page.length === 0) break;
+    }
+    // 流せない曲(配信終了など)を除いて逆順にする
+    const playable = tracks.filter((t) => t.attributes && t.attributes.playParams).reverse();
+    if (!playable.length) return { ok: false, error: 'empty', total: tracks.length };
+    try {
+      mk.shuffleMode = 0; // シャッフルをオフにする
+    } catch (e) {}
+    try {
+      await mk.setQueue({ items: playable, startPlaying: true });
+    } catch (e) {
+      // items で失敗した時は、カタログの曲の番号で入れ直す
+      const ids = playable.map((t) => t.attributes.playParams.catalogId || t.id);
+      await mk.setQueue({ songs: ids, startPlaying: true });
+    }
+    return { ok: true, count: playable.length, total: tracks.length };
+  }
+
   async function run(cmd) {
     const m = music();
     if (!m) return { ok: false, error: 'MusicKit が見つかりません' };
+    if (cmd.action === 'reverse-playlist') return await reversePlaylist(m);
     if (cmd.action === 'load') {
       const before = readState();
       let id = cmd.songId && (await available(cmd.songId)) ? cmd.songId : await resolve(cmd.desc || {});

@@ -1062,9 +1062,12 @@ function buildUi(isPrimary, state) {
   const aui = a.ui || {};
   const mode = creds ? creds.mode : agent.data ? 'agent' : 'none';
   const n = notice && Date.now() < notice.until ? notice.msg : null;
+  // 自分で選んだ音楽サービス(設定で選んだもの。PC Status の人で未設定なら、今のタブのサービス)
+  const chosen = client && client.service && client.service !== 'none' ? client.service : (state && state.service) || null;
   return {
     lang,
     mode,
+    myService: chosen,
     room: creds
       ? {
           id: creds.id,

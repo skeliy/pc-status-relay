@@ -69,9 +69,42 @@
       const changed = !prev || (p && p.id) !== (n && n.id) || prev.isPlaying !== latestState.isPlaying || prev.phase !== latestState.phase;
       if (changed && Date.now() - lastTickAt > 150) tick(); // 曲が変わった・再生/停止した時はすぐ知らせる
     } else if (e.data.kind === 'result') {
-      results.push(e.data.result);
+      const r = e.data.result;
+      if (r && typeof r.id === 'string' && r.id.startsWith('rev-')) onReverseResult(r);
+      else results.push(r);
     }
   }
+
+  // ------------------------------------------------------------ プレイリストを逆順で再生(Apple Music を選んだ人だけ)
+  let reverse = { busy: false, text: null, until: 0 };
+  const onApple = location.hostname === 'music.apple.com';
+  function onPlaylistPage() {
+    return onApple && /\/playlist\/(?:[^/]+\/)?(?:p|pl)\.[^/?#]+/.test(location.pathname);
+  }
+  function playReversed() {
+    if (reverse.busy) return;
+    reverse = { busy: true, text: null, until: 0 };
+    if (lastUi) render(lastUi);
+    window.postMessage({ source: SRC_CMD, cmd: { id: 'rev-' + Date.now(), action: 'reverse-playlist' } }, '*');
+  }
+  function onReverseResult(r) {
+    let text;
+    if (r.ok) text = ['reverseDone', r.count];
+    else if (r.error === 'login') text = ['reverseLogin'];
+    else if (r.error === 'empty') text = ['reverseEmpty'];
+    else text = ['reverseFailed', r.error || ''];
+    reverse = { busy: false, text, until: Date.now() + 6000 };
+    if (lastUi) render(lastUi);
+    setTimeout(() => lastUi && render(lastUi), 6100);
+  }
+  // ページの移動(プレイリストを開いた・閉じた)に合わせて、ボタンを出したり消したりする
+  let lastPath = location.pathname;
+  setInterval(() => {
+    if (location.pathname !== lastPath) {
+      lastPath = location.pathname;
+      if (lastUi) render(lastUi);
+    }
+  }, 700);
 
   // ------------------------------------------------------------ 画面右下の表示
   const host = document.createElement('div');
@@ -138,13 +171,23 @@
     return svg;
   }
 
+  let lastUi = null;
   function render(ui) {
-    const key = JSON.stringify(ui);
+    lastUi = ui;
+    const showReverse = !!(ui && ui.myService === 'apple' && onPlaylistPage());
+    const revText = reverse.text && Date.now() < reverse.until ? reverse.text : null;
+    const key = JSON.stringify([ui, showReverse, reverse.busy, revText]);
     if (key === lastKey) return;
     lastKey = key;
     wrap.textContent = '';
+    const T = (k, ...a) => PcsI18n.t(ui ? ui.lang : 'en', k, ...a); // 画面の言語(アイコンの画面で切り替える)
+    if (showReverse) {
+      // Apple Music を選んだ人が、プレイリストを開いている時だけ出す
+      const b = button(reverse.busy ? T('reverseBusy') : T('reverseButton'), playReversed, true);
+      if (reverse.busy) b.disabled = true;
+      wrap.appendChild(pill([text(T('reverseTitle')), text(revText ? T(...revText) : T('reverseHint'), 'muted')], [b]));
+    }
     if (!ui || (ui.mode === 'none' && !(ui.invites || []).length)) return; // 部屋にも入っておらず、招待も無い
-    const T = (k, ...a) => PcsI18n.t(ui.lang, k, ...a); // 画面の言語(アイコンの画面で切り替える)
     const person = (label, service) => (ui.lang === 'ja' ? `${label}(${SERVICE_NAMES[service] || '?'})` : `${label} (${SERVICE_NAMES[service] || '?'})`);
 
     if (ui.versionMismatch) {
