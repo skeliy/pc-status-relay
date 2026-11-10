@@ -130,9 +130,37 @@
                color: #fff; background: #40435a; white-space: nowrap; }
       button.primary { background: #fa2d48; }
       button:hover { filter: brightness(1.12); }
-      .fab { width: 34px; height: 34px; border-radius: 50%; padding: 0; background: rgba(32,34,44,.85); border: 1px solid rgba(255,255,255,.15);
-             font-size: 16px; opacity: .55; transition: opacity .15s; }
-      .fab:hover { opacity: 1; }
+      .col { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+      /* 右下のヘッドフォン。カーソルを合わせると、上に丸いボタンが出てくる */
+      .dock { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+      .dock[hidden] { display: none; }
+      .menu { display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+      .icon-btn { position: relative; display: grid; place-items: center; padding: 0; border-radius: 50%; cursor: pointer;
+                  color: rgba(255,255,255,.9); background: rgba(28,29,36,.72); border: 1px solid rgba(255,255,255,.12);
+                  backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+                  box-shadow: 0 6px 18px rgba(0,0,0,.28); transition: background .15s, color .15s, transform .15s, opacity .2s; }
+      .icon-btn:hover { background: rgba(48,50,62,.9); color: #fff; filter: none; }
+      .icon-btn:active { transform: scale(.94); }
+      .icon-btn:focus-visible { outline: 2px solid #fa2d48; outline-offset: 2px; }
+      .icon-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      .fab { width: 40px; height: 40px; opacity: .7; }
+      .fab svg { width: 20px; height: 20px; }
+      .dock:hover .fab, .dock.open .fab { opacity: 1; }
+      .opt { width: 36px; height: 36px; opacity: 0; transform: translateY(10px) scale(.85); }
+      .dock:hover .menu, .dock.open .menu, .dock:focus-within .menu { pointer-events: auto; }
+      .dock:hover .opt, .dock.open .opt, .dock:focus-within .opt { opacity: 1; transform: none; }
+      .dock:hover .opt:nth-last-child(2), .dock.open .opt:nth-last-child(2) { transition-delay: .04s; }
+      .opt.done { color: #4ade80; }
+      .opt.fail { color: #f87171; }
+      .opt.busy svg { animation: pcs-spin .9s linear infinite; }
+      @keyframes pcs-spin { to { transform: rotate(360deg); } }
+      /* 名前の吹き出し(左に出る) */
+      .icon-btn[data-tip]::after { content: attr(data-tip); position: absolute; right: calc(100% + 10px); top: 50%; transform: translate(4px, -50%);
+                  white-space: nowrap; font-size: 12px; font-weight: 500; letter-spacing: .01em; color: #fff; background: rgba(20,21,27,.92);
+                  border: 1px solid rgba(255,255,255,.1); padding: 5px 9px; border-radius: 8px; pointer-events: none; opacity: 0;
+                  transition: opacity .12s, transform .12s; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+      .icon-btn[data-tip]:hover::after, .icon-btn[data-tip]:focus-visible::after, .icon-btn.show-tip::after { opacity: 1; transform: translate(0, -50%); }
+      @media (prefers-reduced-motion: reduce) { .icon-btn, .icon-btn::after { transition: none; } .opt.busy svg { animation: none; } }
       .card { background: rgba(32,34,44,.95); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 12px;
               box-shadow: 0 6px 24px rgba(0,0,0,.35); width: 230px; }
       .head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -144,8 +172,10 @@
       .psvc { color: #8f93a6; font-size: 11px; white-space: nowrap; }
       .ptag { color: #fbbf24; background: rgba(251,191,36,.14); border-radius: 6px; padding: 1px 6px; font-size: 10px; font-weight: 600; white-space: nowrap; }
     </style>
-    <div class="wrap"></div>`;
+    <div class="col"><div class="wrap"></div><div class="dock" hidden><div class="menu"></div></div></div>`;
   const wrap = root.querySelector('.wrap');
+  const dock = root.querySelector('.dock');
+  const menu = root.querySelector('.menu');
 
   function el(tag, attrs, children) {
     const e = document.createElement(tag);
@@ -178,6 +208,69 @@
     return svg;
   }
 
+  // 線で描くアイコン(d は SVG の線の形)
+  const ICONS = {
+    headphones: ['M3 18v-6a9 9 0 0 1 18 0v6', 'M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z', 'M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z'],
+    invite: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M19 8v6', 'M22 11h-6'],
+    reverse: ['M3 8l4-4 4 4', 'M7 4v16', 'M21 16l-4 4-4-4', 'M17 20V4'],
+    spinner: ['M21 12a9 9 0 1 1-6.2-8.56'],
+    check: ['M20 6 9 17l-5-5'],
+    alert: ['M12 8v5', 'M12 16.5v.01', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z'],
+  };
+  function lineIcon(name) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of ICONS[name]) {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      svg.appendChild(p);
+    }
+    return svg;
+  }
+
+  // 右下のヘッドフォンと、その上に出てくるボタン(招待・新しい曲から再生)。文字は出さず、名前は吹き出しで出す
+  let dockKey = null;
+  function iconButton(cls, icon, tip, onclick) {
+    const b = el('button', { class: 'icon-btn ' + cls, type: 'button', 'aria-label': tip, 'data-tip': tip });
+    b.appendChild(lineIcon(icon));
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onclick();
+    });
+    return b;
+  }
+  function updateDock(opts, T) {
+    const k = JSON.stringify(opts);
+    if (k === dockKey) return;
+    dockKey = k;
+    menu.textContent = '';
+    for (const o of dock.querySelectorAll(':scope > .fab')) o.remove();
+    if (!opts.length) {
+      dock.hidden = true;
+      dock.classList.remove('open');
+      return;
+    }
+    dock.hidden = false;
+    for (const o of opts) {
+      if (o.id === 'reverse') {
+        const icon = o.state === 'busy' ? 'spinner' : o.state === 'done' ? 'check' : o.state === 'fail' ? 'alert' : 'reverse';
+        const b = iconButton('opt opt-reverse' + (o.state ? ' ' + o.state : ''), icon, o.tip, playReversed);
+        if (o.state === 'busy') b.disabled = true;
+        if (o.state === 'done' || o.state === 'fail') b.classList.add('show-tip');
+        menu.appendChild(b);
+      } else if (o.id === 'invite') {
+        menu.appendChild(iconButton('opt opt-invite', 'invite', o.tip, () => sendAction('request')));
+      }
+    }
+    // ヘッドフォンを押すと開いたままにする(もう一度押すと閉じる)
+    const fab = iconButton('fab', 'headphones', T('dockTitle'), () => dock.classList.toggle('open'));
+    fab.removeAttribute('data-tip');
+    dock.appendChild(fab);
+  }
+  document.addEventListener('click', () => dock.classList.remove('open'));
+
   let lastUi = null;
   function render(ui) {
     lastUi = ui;
@@ -188,12 +281,14 @@
     lastKey = key;
     wrap.textContent = '';
     const T = (k, ...a) => PcsI18n.t(ui ? ui.lang : 'en', k, ...a); // 画面の言語(アイコンの画面で切り替える)
+    // 右下のボタン: 招待(PC Status の人)と、新しい曲から再生(Apple Music を選んだ人が、プレイリストを開いている時)
+    const opts = [];
     if (showReverse) {
-      // Apple Music を選んだ人が、プレイリストを開いている時だけ出す
-      const b = button(reverse.busy ? T('reverseBusy') : T('reverseButton'), playReversed, true);
-      if (reverse.busy) b.disabled = true;
-      wrap.appendChild(pill([text(T('reverseTitle')), text(revText ? T(...revText) : T('reverseHint'), 'muted')], [b]));
+      const state = reverse.busy ? 'busy' : revText ? (revText[0] === 'reverseDone' ? 'done' : 'fail') : '';
+      opts.push({ id: 'reverse', state, tip: revText ? T(...revText) : reverse.busy ? T('reverseBusy') : T('playFromNewest') });
     }
+    if (ui && ui.mode === 'agent' && !(ui.incoming || []).length) opts.push({ id: 'invite', tip: T('inviteTip') });
+    updateDock(opts, T);
     if (!ui || (ui.mode === 'none' && !(ui.invites || []).length)) return; // 部屋にも入っておらず、招待も無い
     const person = (label, service) => (ui.lang === 'ja' ? `${label}(${SERVICE_NAMES[service] || '?'})` : `${label} (${SERVICE_NAMES[service] || '?'})`);
 
@@ -276,10 +371,6 @@
         pill(hosting ? [text(T('hosting')), text(T('hostingHint'), 'muted')] : [text(T('inRoom', (room && room.owner) || '')), text(T('inRoomHint'), 'muted')], [
           button(T('leave'), () => sendAction('leave')),
         ])
-      );
-    } else if (ui.mode === 'agent' && !(ui.incoming || []).length) {
-      wrap.appendChild(
-        el('button', { class: 'fab', title: T('fabTitle', ui.hotkey || ''), text: '🎧', onclick: () => sendAction('request') })
       );
     }
 
