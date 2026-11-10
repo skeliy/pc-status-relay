@@ -28,6 +28,7 @@ const SITE_SCRIPTS = [
 // 調べる時のために、最近の記録を残しておく(アイコンの画面の「デバッグ情報をコピー」で取り出せる)。
 // 裏方が止められても消えないよう、ブラウザを閉じるまでは chrome.storage.session にも入れておく
 const debugLines = [];
+const pageInfo = new Map(); // タブ -> { path, playlist } (調べる時のため)
 let debugDirty = false;
 function fmtArg(a) {
   if (typeof a === 'string') return a;
@@ -982,6 +983,11 @@ async function debugInfo() {
     waitingForNext: !!engine.autoHold,
     substitute: !!engine.substitute,
     notice: engine.currentNotice() || null,
+    reverseButton: (() => {
+      const pi = p ? pageInfo.get(p.id) : null;
+      const chosen = client && client.service && client.service !== 'none' ? client.service : st.service || null;
+      return { path: pi ? pi.path : null, playlistPage: pi ? pi.playlist : null, myService: chosen, shown: !!(pi && pi.playlist && chosen === 'apple') };
+    })(),
   };
   return '=== Listen Together debug ===\n' + JSON.stringify(info, null, 2) + '\n\n=== log (latest last) ===\n' + debugLines.join('\n');
 }
@@ -1028,6 +1034,7 @@ async function handleTick(tabId, body) {
   const prev = tabs.get(tabId) || {};
   const entry = { id: tabId, at: now, state, lastPlaying: state && state.isPlaying ? now : prev.lastPlaying };
   tabs.set(tabId, entry);
+  if (body.page) pageInfo.set(tabId, Object.assign({ at: Date.now() }, body.page));
   for (const r of body.results || []) {
     const cmd = engine.pending[r.id];
     if (cmd && (!r.ok || cmd.action === 'load')) {

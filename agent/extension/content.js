@@ -39,7 +39,8 @@
     const sending = results;
     results = [];
     try {
-      chrome.runtime.sendMessage({ type: 'tick', body: { state: latestState, results: sending } }, (resp) => {
+      const page = { path: location.pathname, playlist: onPlaylistPage() };
+      chrome.runtime.sendMessage({ type: 'tick', body: { state: latestState, results: sending, page } }, (resp) => {
         inFlight = false;
         if (chrome.runtime.lastError || !resp || !resp.ok) return render(null);
         for (const cmd of resp.data.commands || []) window.postMessage({ source: SRC_CMD, cmd }, '*');
@@ -78,8 +79,14 @@
   // ------------------------------------------------------------ プレイリストを逆順で再生(Apple Music を選んだ人だけ)
   let reverse = { busy: false, text: null, until: 0 };
   const onApple = location.hostname === 'music.apple.com';
+  // プレイリストのページか(住所のどこかにプレイリストの番号 p.〜 / pl.〜 がある)
+  //   例: /jp/library/playlist/p.XXXX  /library/playlist/p.XXXX  /jp/playlist/名前/pl.XXXX  /jp/playlist/pl.u-XXXX
+  function playlistIdFromPath(path) {
+    const m = String(path || '').match(/\/((?:p|pl)\.[A-Za-z0-9_-]+)(?=[/?#]|$)/);
+    return m ? m[1] : null;
+  }
   function onPlaylistPage() {
-    return onApple && /\/playlist\/(?:[^/]+\/)?(?:p|pl)\.[^/?#]+/.test(location.pathname);
+    return onApple && /playlist/i.test(location.pathname) && !!playlistIdFromPath(location.pathname);
   }
   function playReversed() {
     if (reverse.busy) return;

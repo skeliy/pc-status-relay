@@ -327,7 +327,7 @@
   // 今開いているプレイリストを「新しく追加した曲 → 古い曲」の逆順でキューに入れて流す
   //   ライブラリ: /jp/library/playlist/p.XXXX   カタログ: /jp/playlist/名前/pl.XXXX
   async function reversePlaylist(mk) {
-    const pm = location.pathname.match(/\/playlist\/(?:[^/]+\/)?((?:p|pl)\.[^/?#]+)/);
+    const pm = /playlist/i.test(location.pathname) && location.pathname.match(/\/((?:p|pl)\.[A-Za-z0-9_-]+)(?=[/?#]|$)/);
     if (!pm) return { ok: false, error: 'not-playlist' };
     const id = pm[1];
     const isLibrary = id.startsWith('p.');
