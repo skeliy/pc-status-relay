@@ -30,6 +30,7 @@
     }
   }
 
+  let tickFails = 0;
   function tick() {
     if (stopped) return;
     if (!alive()) return stop(); // 拡張機能が読み込み直された(新しい自分が別に動いている)
@@ -42,7 +43,12 @@
       const page = { path: location.pathname, playlist: onPlaylistPage() };
       chrome.runtime.sendMessage({ type: 'tick', body: { state: latestState, results: sending, page } }, (resp) => {
         inFlight = false;
-        if (chrome.runtime.lastError || !resp || !resp.ok) return render(null);
+        if (chrome.runtime.lastError || !resp || !resp.ok) {
+          // 拡張機能の裏側が起き直している時などに一瞬失敗しても、右下の表示は消さない(3秒続いたら消す)
+          if (++tickFails >= 6) render(null);
+          return;
+        }
+        tickFails = 0;
         for (const cmd of resp.data.commands || []) window.postMessage({ source: SRC_CMD, cmd }, '*');
         render(resp.data.ui);
       });
@@ -116,7 +122,7 @@
   // ------------------------------------------------------------ 画面右下の表示
   const host = document.createElement('div');
   host.id = 'pcs-music-share';
-  host.style.cssText = 'position:fixed;right:16px;bottom:96px;z-index:2147483647;';
+  host.style.cssText = 'position:fixed;right:16px;bottom:96px;z-index:2147483647;pointer-events:none;';
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `
     <style>
@@ -131,25 +137,30 @@
       button.primary { background: #fa2d48; }
       button:hover { filter: brightness(1.12); }
       .col { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+      /* 見えている物だけがクリックを受け取る(すき間や見えないボタンの場所は、下のページに通す) */
+      .col, .wrap { pointer-events: none; }
+      .wrap > * { pointer-events: auto; }
       /* 右下のヘッドフォン。カーソルを合わせると、上に丸いボタンが出てくる */
-      .dock { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+      /* 開いていない時は、ヘッドフォン以外の場所(見えないボタンの場所)はページのクリックを邪魔しない */
+      .dock { display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
       .dock[hidden] { display: none; }
+      .dock.hover, .dock.open { pointer-events: auto; }
       .menu { display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
       .icon-btn { position: relative; display: grid; place-items: center; padding: 0; border-radius: 50%; cursor: pointer;
-                  color: rgba(255,255,255,.9); background: rgba(28,29,36,.72); border: 1px solid rgba(255,255,255,.12);
-                  backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+                  color: rgba(255,255,255,.9); background: rgba(30,31,39,.9); border: 1px solid rgba(255,255,255,.12);
                   box-shadow: 0 6px 18px rgba(0,0,0,.28); transition: background .15s, color .15s, transform .15s, opacity .2s; }
       .icon-btn:hover { background: rgba(48,50,62,.9); color: #fff; filter: none; }
       .icon-btn:active { transform: scale(.94); }
       .icon-btn:focus-visible { outline: 2px solid #fa2d48; outline-offset: 2px; }
       .icon-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-      .fab { width: 40px; height: 40px; opacity: .7; }
+      .fab { width: 40px; height: 40px; opacity: .75; pointer-events: auto; }
+      .fab::before { content: ''; position: absolute; inset: -8px; border-radius: 50%; } /* 少し外れていても反応するように */
       .fab svg { width: 20px; height: 20px; }
-      .dock:hover .fab, .dock.open .fab { opacity: 1; }
+      .dock.hover .fab, .dock.open .fab { opacity: 1; }
       .opt { width: 36px; height: 36px; opacity: 0; transform: translateY(10px) scale(.85); }
-      .dock:hover .menu, .dock.open .menu, .dock:focus-within .menu { pointer-events: auto; }
-      .dock:hover .opt, .dock.open .opt, .dock:focus-within .opt { opacity: 1; transform: none; }
-      .dock:hover .opt:nth-last-child(2), .dock.open .opt:nth-last-child(2) { transition-delay: .04s; }
+      .dock.hover .menu, .dock.open .menu, .dock:focus-within .menu { pointer-events: auto; }
+      .dock.hover .opt, .dock.open .opt, .dock:focus-within .opt { opacity: 1; transform: none; }
+      .dock.hover .opt:nth-last-child(2), .dock.open .opt:nth-last-child(2) { transition-delay: .04s; }
       .opt.done { color: #4ade80; }
       .opt.fail { color: #f87171; }
       .opt.busy svg { animation: pcs-spin .9s linear infinite; }
@@ -241,33 +252,66 @@
     });
     return b;
   }
+  // ヘッドフォンは最初に1つだけ作って、ずっと同じものを使う(作り直すと、カーソルが乗っていても「乗っていない」扱いになるため)
+  let fab = null;
+  function ensureFab(T) {
+    if (!fab) {
+      fab = iconButton('fab', 'headphones', '', () => dock.classList.toggle('open'));
+      fab.removeAttribute('data-tip');
+      dock.appendChild(fab);
+    }
+    fab.setAttribute('aria-label', T('dockTitle'));
+  }
+  // カーソルが乗ったらすぐ開き、離れても少しの間は開いたままにする(ボタンの間を動く時に閉じないように)
+  let hoverTimer = null;
+  dock.addEventListener('pointerenter', () => {
+    clearTimeout(hoverTimer);
+    dock.classList.add('hover');
+  });
+  dock.addEventListener('pointerleave', () => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => dock.classList.remove('hover'), 280);
+  });
+  function setOptButton(b, o) {
+    const icon = o.id === 'invite' ? 'invite' : o.state === 'busy' ? 'spinner' : o.state === 'done' ? 'check' : o.state === 'fail' ? 'alert' : 'reverse';
+    if (b.dataset.icon !== icon) {
+      b.dataset.icon = icon;
+      b.textContent = '';
+      b.appendChild(lineIcon(icon));
+    }
+    b.className = 'icon-btn opt opt-' + o.id + (o.state ? ' ' + o.state : '') + (o.state === 'done' || o.state === 'fail' ? ' show-tip' : '');
+    b.setAttribute('aria-label', o.tip);
+    b.setAttribute('data-tip', o.tip);
+    b.disabled = o.state === 'busy';
+  }
   function updateDock(opts, T) {
     const k = JSON.stringify(opts);
     if (k === dockKey) return;
     dockKey = k;
-    menu.textContent = '';
-    for (const o of dock.querySelectorAll(':scope > .fab')) o.remove();
     if (!opts.length) {
       dock.hidden = true;
-      dock.classList.remove('open');
+      dock.classList.remove('open', 'hover');
+      menu.textContent = '';
       return;
     }
+    ensureFab(T);
     dock.hidden = false;
+    // 今あるボタンはそのまま使い、中身だけ変える(変わる度に作り直すと、ちらついて見える)
+    const have = new Map(Array.from(menu.children).map((b) => [b.dataset.opt, b]));
+    const want = [];
     for (const o of opts) {
-      if (o.id === 'reverse') {
-        const icon = o.state === 'busy' ? 'spinner' : o.state === 'done' ? 'check' : o.state === 'fail' ? 'alert' : 'reverse';
-        const b = iconButton('opt opt-reverse' + (o.state ? ' ' + o.state : ''), icon, o.tip, playReversed);
-        if (o.state === 'busy') b.disabled = true;
-        if (o.state === 'done' || o.state === 'fail') b.classList.add('show-tip');
-        menu.appendChild(b);
-      } else if (o.id === 'invite') {
-        menu.appendChild(iconButton('opt opt-invite', 'invite', o.tip, () => sendAction('request')));
+      let b = have.get(o.id);
+      if (!b) {
+        b = iconButton('opt', o.id === 'invite' ? 'invite' : 'reverse', o.tip, o.id === 'invite' ? () => sendAction('request') : playReversed);
+        b.dataset.opt = o.id;
       }
+      setOptButton(b, o);
+      want.push(b);
     }
-    // ヘッドフォンを押すと開いたままにする(もう一度押すと閉じる)
-    const fab = iconButton('fab', 'headphones', T('dockTitle'), () => dock.classList.toggle('open'));
-    fab.removeAttribute('data-tip');
-    dock.appendChild(fab);
+    for (const b of Array.from(menu.children)) if (!want.includes(b)) b.remove();
+    want.forEach((b, i) => {
+      if (menu.children[i] !== b) menu.insertBefore(b, menu.children[i] || null);
+    });
   }
   document.addEventListener('click', () => dock.classList.remove('open'));
 
