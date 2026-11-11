@@ -534,6 +534,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // エージェント(WRITE_TOKEN を持つ PC)が、トレイのアイコンから開くダッシュボードの URL を知るための入口。
+  // dashboard_url を config.json に書いていない PC でも、クリックでダッシュボードが開くようにする。
+  // 返すのは友達にも共有する前提の閲覧用 URL だけ(OWNER_TOKEN は決して返さない)。
+  if (pathname === '/api/dashboard-link' && req.method === 'GET') {
+    if (!isWriteAuthorized(req)) {
+      sendJson(res, 401, { ok: false, error: 'unauthorized' });
+      return;
+    }
+    const q = VIEW_TOKEN ? `?token=${encodeURIComponent(VIEW_TOKEN)}` : '';
+    sendJson(res, 200, { ok: true, path: `/dashboard${q}` });
+    return;
+  }
+
   if (pathname === '/dashboard' && req.method === 'GET') {
     if (!isViewAuthorized(req, parsedUrl)) {
       sendPlain(res, 401, 'unauthorized (URLの末尾に ?token=閲覧用トークン を付けてください)');

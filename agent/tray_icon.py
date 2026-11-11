@@ -4,7 +4,8 @@
 クリックだけでダッシュボードやカスタムステータス設定画面をすぐ開けるようにするモジュール。
 
 ・左クリック(またはダブルクリック) → ダッシュボードを開く(config.jsonにdashboard_urlを
-  設定していない場合は、代わりにこのPC自身のカスタムステータス設定画面を開く)
+  設定していない場合は、中継サーバーから閲覧用の URL をもらって開く。中継サーバーに
+  繋がらない時だけ、このPC自身のカスタムステータス設定画面を開く)
 ・右クリック → メニュー(ダッシュボードを開く/カスタムステータス設定を開く/
   曲の共有をリクエスト・終了/終了)
 
@@ -46,6 +47,31 @@ def dashboard_target_url(config):
     return f"http://127.0.0.1:{config.get('local_ui_port', 8787)}/"
 
 
+def fetch_dashboard_url(config, timeout=8):
+    """dashboard_url が設定されていない時、中継サーバーから閲覧用のダッシュボード URL をもらう。
+    取れなかった時は None(呼び出し側でカスタムステータス画面に切り替える)。"""
+    try:
+        import requests
+        from music_sync import relay_base_url
+
+        base = relay_base_url(config.get("server_url"))
+        if not base:
+            return None
+        r = requests.get(
+            base + "/api/dashboard-link",
+            headers={"Authorization": f"Bearer {config.get('write_token', '')}"},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return None
+        path = (r.json() or {}).get("path") or ""
+        if not path.startswith("/dashboard"):
+            return None
+        return base + path
+    except Exception:
+        return None
+
+
 def local_ui_url(config):
     return f"http://127.0.0.1:{config.get('local_ui_port', 8787)}/"
 
@@ -71,8 +97,21 @@ def start_tray_icon(config, music=None):
         print("[トレイアイコン] pystray/Pillowが無いため表示をスキップします(pip install -r requirements.txt で追加できます)")
         return None
 
+    fetched = {"url": None}
+
     def open_dashboard(icon=None, item=None):
-        webbrowser.open(dashboard_target_url(config))
+        if (config.get("dashboard_url") or "").strip():
+            webbrowser.open(dashboard_target_url(config))
+            return
+        # dashboard_url を書いていない PC: 中継サーバーから URL をもらって開く(1回もらったら覚えておく)
+        def run():
+            url = fetched["url"] or fetch_dashboard_url(config)
+            if url:
+                fetched["url"] = url
+                webbrowser.open(url)
+            else:
+                webbrowser.open(local_ui_url(config))  # 中継サーバーに繋がらない時だけ、今まで通り
+        threading.Thread(target=run, daemon=True).start()
 
     def open_local_ui(icon=None, item=None):
         webbrowser.open(local_ui_url(config))

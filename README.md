@@ -140,7 +140,7 @@ python agent.py
 | `auto_update_enabled` | 自動アップデートを使うか(デフォルトtrue。詳細は下記) |
 | `update_base_url` | 自動アップデート用のコード配布URL(未設定なら自動アップデートは何もしない) |
 | `show_tray_icon` | タスクバー右下にアイコンを表示するか(デフォルトfalse。詳細は下記) |
-| `dashboard_url` | トレイアイコンをクリックしたときに開くダッシュボードのURL(`?token=...`込み)。空ならこのPC自身のカスタムステータス設定画面を開く |
+| `dashboard_url` | トレイアイコンをクリックしたときに開くダッシュボードのURL(`?token=...`込み)。空なら中継サーバーから閲覧用のURLを自動でもらって開く(中継サーバーに繋がらない時だけ、このPC自身のカスタムステータス設定画面を開く) |
 | `music_enabled` | 「一緒に聴く」を使うか(デフォルトtrue。詳細は「5. 一緒に聴く」) |
 | `listen_room` / `listen_password` / `music_service` / `music_hotkey` / `music_sound` | 「5. 一緒に聴く」を参照 |
 | `update_check_interval_min` | 起動中に新しいバージョンを確認する間隔(分、デフォルト30。0で起動時だけ) |
@@ -191,7 +191,7 @@ http://127.0.0.1:8787/
    "show_tray_icon": true,
    "dashboard_url": "https://pc-status-relay.onrender.com/dashboard?token=VIEW_TOKENの値"
    ```
-   (`dashboard_url`を空にしておくと、代わりにこのPC自身のカスタムステータス設定画面が開きます)
+   (`dashboard_url`を空にしておいても、中継サーバーから閲覧用のURLを自動でもらって開きます。中継サーバーに繋がらない時だけ、このPC自身のカスタムステータス設定画面が開きます)
 3. `python agent.py`を再起動
 
 **使い方**
