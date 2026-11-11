@@ -48,6 +48,7 @@
       this.seekSince = null; // 再生位置が共有の状態から飛んでいるのに気付いた時刻
       this.substitute = null; // { until, desc } 見つからなかった曲の代わりに、聴いている人が自分で選ぶのを待っている
       this.ourLoads = new Map(); // こちらで流した曲の番号 -> 時刻(遅れて始まった曲を「自分で選んだ曲」と間違えないため)
+      this.seenSongs = new Map(); // 自分のプレイヤーで見た曲の番号 -> { title, artist, duration }(届いた情報の食い違いに気付くため)
     }
 
     _expected(snap, t) {
@@ -80,6 +81,16 @@
       let position = Number(data.position) || 0;
       if (playing) position += (ageSec || 0) + LATENCY_COMP_SEC;
       let ownId = this.service && song.ids ? song.ids[this.service] || null : null;
+      // 届いた曲の番号が、自分のプレイヤーで見たことのある別の曲(曲名も長さも違う)を指している時は、
+      // 送った人の画面の読み取りがおかしくなっている(止まった画面の曲名と、前の曲の番号が混ざっている)。信用せずに無視する
+      const seen = ownId ? this.seenSongs.get(ownId) : null;
+      if (seen && !looseSame(song, { title: seen.title, artist: seen.artist, duration: seen.duration })) {
+        const a = Number(song.duration) || 0;
+        if (a && seen.duration && Math.abs(a - seen.duration) > 5) {
+          this.log(`届いた情報の曲名と番号が食い違うので無視: ${song.title} (番号は ${seen.title} のもの) from ${fromLabel}`);
+          return;
+        }
+      }
       if (!ownId && this.service) ownId = this.lookupOwnId(this.service, song) || null; // 前に代わりの曲を選んだ曲
       const snap = { desc: song, ownId, playing, position, at: t, mine: false };
       // 同じ曲の情報なら、こちらで見つけた番号を引き継ぐ
@@ -144,6 +155,12 @@
       opts = opts || {};
       if (!state || !state.available) return [];
       this.service = state.service || this.service;
+      // プレイヤーの画面が止まっている(裏のタブで表示が更新されないなど)間は、読み取った状態を信用しない
+      if (state.stale) return [];
+      if (state.song && state.song.id && state.song.title && !state.song.localOnly) {
+        this.seenSongs.set(state.song.id, { title: state.song.title, artist: state.song.artist || '', duration: Number(state.song.duration) || 0 });
+        if (this.seenSongs.size > 300) this.seenSongs.delete(this.seenSongs.keys().next().value);
+      }
       if (state.isPlaying) this.needsClick = false;
       const t = this.clock();
       let cmds = [];
@@ -168,8 +185,20 @@
         this.log('相手の状態に合わせきれないまま時間切れ');
         this.target = null;
         // 合わせきれなかった自分の状態を「新しく選んだ・シークした」と勘違いして送らないよう、今の状態を基準にしておく
+        // ただし今流れている曲が届いた曲と違う時は、届いた曲の番号をこの曲に結び付けない
+        // (結び付けると、この曲の位置を送った時に、届いた曲の番号が付いてしまう)
         if (st.song && st.song.id) {
-          this.shared = { desc: tg.desc, ownId: st.song.id, playing: !!st.isPlaying, position: Number(st.position) || 0, at: t, mine: false };
+          const same = st.song.id === tg.ownId || looseSame(tg.desc, st.song);
+          const desc = same
+            ? tg.desc
+            : {
+                title: st.song.title || null,
+                artist: st.song.artist || null,
+                duration: Number(st.song.duration) || null,
+                alts: [],
+                ids: st.song.localOnly || !this.service ? {} : { [this.service]: st.song.id },
+              };
+          this.shared = { desc, ownId: st.song.id, playing: !!st.isPlaying, position: Number(st.position) || 0, at: t, mine: false };
         }
         return [];
       }
@@ -184,7 +213,8 @@
         this.target = null;
         return this._holdAutoAdvance(this.shared, st, t);
       }
-      if (tg.loaded && tg.ownId && localId && localId !== tg.ownId && !loadingNow && since('load') > 3 && st.phase === PLAYING) {
+      // (曲を入れる前から流れていた曲のままなら、選び直したのではなく、まだ画面が切り替わっていないだけ)
+      if (tg.loaded && tg.ownId && localId && localId !== tg.ownId && localId !== tg.loadedOver && !loadingNow && since('load') > 3 && st.phase === PLAYING) {
         this.log('合わせている途中で、自分で別の曲を選んだ');
         this.target = null;
         return this._detect(st, t, {}) || [];
@@ -208,6 +238,7 @@
         // 前に出した「曲を流す」の結果がまだ来ていなければ待つ(探すのに時間がかかる Spotify などで、二重に流さないため)
         const loading = Object.values(this.pending).some((c) => c.action === 'load');
         if (since('load') > (loading ? 30 : 10)) {
+          if (tg.loadedOver === undefined) tg.loadedOver = localId || null; // 曲を入れる前に流れていた曲
           return [this._cmd('load', { songId: tg.ownId, desc: tg.desc, position: expected, play: tg.playing })];
         }
         return [];
@@ -401,8 +432,18 @@
       }
       if (Math.abs(position - this._expected(sh, t)) > 3.0) {
         // シークした(読み取りが一瞬ぶれただけのこともあるので、少し続いてから送る)
-        if (this.seekSince == null) this.seekSince = t;
-        else if (t - this.seekSince >= SEEK_CONFIRM_SEC) this._broadcast(st, t);
+        if (this.seekSince == null) {
+          this.seekSince = t;
+          this.seekPos = position;
+        } else if (t - this.seekSince >= SEEK_CONFIRM_SEC) {
+          // 再生中なのに位置が少しも進んでいない = プレイヤーの画面が止まっている(シークではない)。送らずに待つ
+          if (playing && Math.abs(position - this.seekPos) < 0.3) {
+            this.seekSince = t;
+            this.seekPos = position;
+            return;
+          }
+          this._broadcast(st, t);
+        }
       } else {
         this.seekSince = null;
       }

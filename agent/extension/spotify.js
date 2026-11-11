@@ -183,6 +183,21 @@
     return !$('[data-testid="login-button"]');
   }
 
+  // 画面が止まっていないか: 再生中のはずなのに、時計の表示もバーも長い間動かない時は、
+  // 裏のタブなどで Spotify の画面が更新されていない(曲名・番号・位置が古いまま)。その間は読み取った状態を使わない
+  const frozen = { sig: null, at: 0 };
+  function screenFrozen(playing) {
+    const bar = barInfo();
+    const sig = String(($('[data-testid="playback-position"]') || {}).textContent || '') + '|' + (bar ? bar.pct : '');
+    const now = Date.now();
+    if (sig !== frozen.sig || !playing) {
+      frozen.sig = sig;
+      frozen.at = now;
+      return false;
+    }
+    return now - frozen.at > 2500;
+  }
+
   const songSeen = { key: null, at: 0, pct: null };
   function readState() {
     if (!$('[data-testid="now-playing-bar"]') && !$('[data-testid="player-controls"]')) return { available: false, service: SERVICE };
@@ -192,6 +207,9 @@
     const id = trackId || (meta.title ? 'meta:' + metaKey(meta) : null);
     const playing = isPlayingNow();
     const { position, duration } = readPosition();
+    if (screenFrozen(playing)) {
+      return { available: true, loggedIn: loggedIn(), service: SERVICE, stale: true, quietResolve: false, queue: [], song: null, isPlaying: playing, phase: 'loading' };
+    }
     // 曲が変わった直後は、再生位置のバーがまだ前の曲のままのことがある。バーが書き換わるまで(長くても1.5秒)は
     // 「読み込み中」として、前の曲の位置で送らない
     const key = id || '';
