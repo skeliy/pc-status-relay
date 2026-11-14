@@ -1,8 +1,6 @@
 # Listen Together - install (一緒に聴く 拡張機能を入れる)
 #
-# 使い方(Windows キー + R の画面か、PowerShell に貼り付けて Enter):
-#   powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex"
-# PowerShell の画面なら、これだけでもよい:
+# 使い方(PowerShell に貼り付けて Enter):
 #   irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex
 #
 # 1. GitHub から拡張機能を %LOCALAPPDATA%\ListenTogether にダウンロードする
@@ -60,6 +58,4 @@ if ($ltAuto) {
 } else {
     Write-Host 'To update later, run this command again. / 新しい版にする時は、このコマンドをもう一度実行してください。' -ForegroundColor Yellow
 }
-Write-Host ''
-Write-Host 'You can close this window now. / この画面は閉じてかまいません。'
 Write-Host ''

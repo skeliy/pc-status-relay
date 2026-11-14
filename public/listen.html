@@ -327,10 +327,10 @@
       copy: 'Copy',
       copied: 'Copied',
       cmdStep1: 'Click <b>Copy</b>.',
-      cmdStep2: 'Hold the <b>Windows key</b> and press <b>R</b>. In the small <b>Run</b> box that opens, press <b>Ctrl+V</b>, then <b>Enter</b>. Another window opens; when it says <b>Done!</b>, you can close it.<br><small>If that doesn’t work: press the Windows key, type <b>powershell</b>, press Enter, then press Ctrl+V and Enter in that window.</small>',
+      cmdStep2: 'Press the <b>Windows key</b>, type <b>powershell</b> and press <b>Enter</b>. In the window that opens, press <b>Ctrl+V</b>, then <b>Enter</b>. Wait until it says <b>Done!</b>',
       cmdStep3: 'Open <code>chrome://extensions</code> and turn on <b>Developer mode</b> (top right). Click <b>Load unpacked</b>, press <b>Ctrl+V</b>, then click <b>Select Folder</b>.',
       cmdStep4: 'Reload this page.',
-      autoNote: 'It updates itself automatically. If you installed it from a .zip before, remove that one first. To uninstall, paste <code>powershell -NoExit -Command "irm ORIGIN/listen-uninstall.ps1 | iex"</code> into the same <b>Windows key + R</b> box.',
+      autoNote: 'It updates itself automatically. If you installed it from a .zip before, remove that one first. To uninstall: <code>irm ORIGIN/listen-uninstall.ps1 | iex</code>',
       cmdStep2Mac: 'Press <b>Cmd+Space</b>, type <b>Terminal</b> and press <b>Return</b>. In the window that opens, press <b>Cmd+V</b>, then <b>Return</b>. Wait until it says <b>Done!</b>',
       cmdStep3Mac: 'Open <code>chrome://extensions</code> and turn on <b>Developer mode</b> (top right). Click <b>Load unpacked</b>, press <b>Cmd+Shift+G</b>, then <b>Cmd+V</b> and <b>Return</b>, and click <b>Select</b>.',
       autoNoteMac: 'It updates itself automatically. If you installed it from a .zip before, remove that one first. To uninstall: <code>curl -fsSL ORIGIN/listen-uninstall.sh | bash</code>',
@@ -383,10 +383,10 @@
       copy: 'コピー',
       copied: 'コピーしました',
       cmdStep1: '<b>コピー</b>を押します。',
-      cmdStep2: '<b>Windows キー</b>を押しながら <b>R</b> を押します。小さな<b>ファイル名を指定して実行</b>の画面が開くので、<b>Ctrl+V</b> を押してから <b>Enter</b> を押します。別の画面が開き、<b>完了しました</b>と出たら、その画面は閉じてかまいません。<br><small>うまくいかない時は、Windows キーを押して <b>powershell</b> と入力して Enter を押し、開いた画面で Ctrl+V と Enter を押しても入れられます。</small>',
+      cmdStep2: '<b>Windows キー</b>を押して <b>powershell</b> と入力し、<b>Enter</b> を押します。開いた画面で <b>Ctrl+V</b> を押してから <b>Enter</b> を押し、<b>完了しました</b>と出るまで待ちます。',
       cmdStep3: '<code>chrome://extensions</code> を開いて、右上の<b>デベロッパーモード</b>をオンにします。<b>パッケージ化されていない拡張機能を読み込む</b>を押し、<b>Ctrl+V</b> を押してから<b>フォルダーの選択</b>を押します。',
       cmdStep4: 'このページを再読み込みします。',
-      autoNote: '新しい版は自動で入ります。前に zip で入れた人は、先にそちらを削除してください。やめる時は、<code>powershell -NoExit -Command "irm ORIGIN/listen-uninstall.ps1 | iex"</code> を同じように <b>Windows キー + R</b> の画面に貼り付けて実行します。',
+      autoNote: '新しい版は自動で入ります。前に zip で入れた人は、先にそちらを削除してください。やめる時は <code>irm ORIGIN/listen-uninstall.ps1 | iex</code> を実行します。',
       cmdStep2Mac: '<b>Cmd+Space</b> を押して <b>ターミナル</b>(Terminal)と入力し、<b>Return</b> を押します。開いた画面で <b>Cmd+V</b> を押してから <b>Return</b> を押し、<b>完了しました</b>と出るまで待ちます。',
       cmdStep3Mac: '<code>chrome://extensions</code> を開いて、右上の<b>デベロッパーモード</b>をオンにします。<b>パッケージ化されていない拡張機能を読み込む</b>を押し、<b>Cmd+Shift+G</b> を押してから <b>Cmd+V</b> と <b>Return</b> を押し、<b>選択</b>を押します。',
       autoNoteMac: '新しい版は自動で入ります。前に zip で入れた人は、先にそちらを削除してください。やめる時は <code>curl -fsSL ORIGIN/listen-uninstall.sh | bash</code> を実行します。',
@@ -459,10 +459,7 @@
 
   // 拡張機能を入れるコマンド(Windows は PowerShell、Mac はターミナルに貼り付ける)。初めは Windows
   const INSTALL_CMDS = {
-    // Windows キー + R の画面に貼り付けて Enter で動くように、powershell を起動する形にする。
-    // 終わっても画面が閉じないように -NoExit を付ける(「完了しました」やエラーが読めるように)。
-    // PowerShell の画面に貼り付けても同じように動く。「ファイル名を指定して実行」は259文字までなので短く保つ
-    win: `powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm ${location.origin}/listen-install.ps1 | iex"`,
+    win: `irm ${location.origin}/listen-install.ps1 | iex`,
     mac: `curl -fsSL ${location.origin}/listen-install.sh | bash`,
   };
   function setOs(next) {

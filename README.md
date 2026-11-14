@@ -339,7 +339,7 @@ Discord の「プレイ中」の表示(Apple Music の再生中の表示)に、�
 Chrome・Brave・Edge で使えます(Firefox は非対応)。
 
 - **エージェントを動かしているPC**: 拡張機能ページ(`chrome://extensions` など)でデベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」で **agent.py と同じフォルダの中の `extension` フォルダ** を選びます。拡張機能も自動アップデートで新しくなり、自分で読み込み直します。
-- **Discord のリンクから来た人(Windows)**: 参加ページの「コピー」を押してから、`Windows キー + R` を押して開く「ファイル名を指定して実行」の画面に `Ctrl+V` → `Enter` で貼り付けて実行し(中身は `powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex"`。PowerShell の画面に貼り付けても動きます)、表示されたフォルダ(`%LOCALAPPDATA%\ListenTogether`。場所はクリップボードにコピーされる)を同じ手順で読み込みます。
+- **Discord のリンクから来た人(Windows)**: 参加ページに出るコマンド `irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex` を PowerShell に貼り付けて実行し、表示されたフォルダ(`%LOCALAPPDATA%\ListenTogether`。場所はクリップボードにコピーされる)を同じ手順で読み込みます。
   - コマンドは、拡張機能を GitHub(このリポジトリの `agent/extension`)からダウンロードし、タスクスケジューラに「ListenTogetherUpdater」というタスクを登録します。このタスクが2時間ごとに `public/listen-update.ps1` を GitHub から取ってきて実行し、新しい版があればフォルダの中身を入れ替えます。拡張機能はそれに気付いて、自分で読み込み直します(一緒に聴いている最中は、終わってから読み込み直します)。管理者の権限はいりません。
   - やめる時は、拡張機能ページで削除してから `irm https://pc-status-relay.onrender.com/listen-uninstall.ps1 | iex` を実行します(タスクとフォルダが消えます)。
   - 拡張機能アイコンを押した画面を開くたびに、新しい版があるかを確かめます。あれば画面の上に「新しい版があります」と、今すぐ入れるためのコマンド(Windows: `Start-ScheduledTask -TaskName ListenTogetherUpdater`、Mac: `launchctl kickstart -k gui/$(id -u)/com.skeliy.listentogether.updater`。コピーボタン付き)が出ます。実行して新しい版が入ると、拡張機能が自分で読み込み直します(画面を開いたままでも3秒ごとに確かめます)。
