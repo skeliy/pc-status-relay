@@ -7,6 +7,7 @@ local_status_server.py
 tray_icon.py
 music_sync.py
 popup.py
+week_log.py
 requirements.txt
 extension/manifest.json
 extension/background.js

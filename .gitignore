@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 config.json
 *.log
+week_log.json
+week_log.json.*
+schedule.json

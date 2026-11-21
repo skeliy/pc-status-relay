@@ -359,6 +359,16 @@ def main_loop(config):
     music = start_music(config)
     start_periodic_update(config, override, music)
 
+    # 1週間分の「何にどれくらい時間を使ったか」をこのPCに記録して、1分ごとに中継サーバーへ送る
+    weeklog = None
+    try:
+        from week_log import WeekLog, start_week_reporter
+
+        weeklog = WeekLog(os.path.join(SCRIPT_DIR, "week_log.json"))
+        start_week_reporter(config, weeklog, SCRIPT_DIR)
+    except Exception as e:
+        print(f"[週の記録] 始められませんでした: {e}")
+
     if config.get("show_tray_icon", False):
         try:
             from tray_icon import start_tray_icon
@@ -374,6 +384,11 @@ def main_loop(config):
     while True:
         try:
             payload = build_payload(config, override, tracker)
+            if weeklog is not None:
+                try:
+                    weeklog.add(payload)
+                except Exception as e:
+                    print(f"[週の記録] 記録できませんでした: {e}")
             resp = requests.post(
                 config["server_url"], json=payload, headers=headers, timeout=config["request_timeout_sec"]
             )

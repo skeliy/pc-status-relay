@@ -65,6 +65,16 @@ const HISTORY_TITLE_MAX_SEGMENTS = parseInt(process.env.HISTORY_TITLE_MAX_SEGMEN
 
 const DASHBOARD_HTML_PATH = path.join(__dirname, 'public', 'dashboard.html');
 const HISTORY_HTML_PATH = path.join(__dirname, 'public', 'history.html');
+// 今の様子・予定表・1週間の使い方をまとめたページ(トレイの青い丸から開く)。/dashboard でもこれを出す
+const HUB_HTML_PATH = path.join(__dirname, 'public', 'hub.html');
+
+// 各PCが1分ごとに送ってくる「今週・先週、何にどれくらい時間を使ったか」の集計。
+// 記録そのものは各PC(week_log.json)が持っているので、このサーバーが再起動しても、
+// 次の1分で元に戻る。ここで覚えておくのは最新の1つだけ。
+const weekReports = Object.create(null);
+// 持ち主のPCから5分ごとに届く予定表(schedule.json の中身)。GitHub には置かない
+let scheduleData = null;
+let scheduleAt = 0;
 
 if (!WRITE_TOKEN) {
   console.warn('[警告] WRITE_TOKEN が未設定です。誰でも状態を書き込めてしまいます。必ず設定してください。');
@@ -547,7 +557,97 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (pathname === '/dashboard' && req.method === 'GET') {
+  if ((pathname === '/dashboard' || pathname === '/hub') && req.method === 'GET') {
+    if (!isViewAuthorized(req, parsedUrl)) {
+      sendPlain(res, 401, 'unauthorized (URLの末尾に ?token=閲覧用トークン を付けてください)');
+      return;
+    }
+    fs.readFile(HUB_HTML_PATH, 'utf8', (err, html) => {
+      if (err) {
+        sendPlain(res, 500, 'hub.html not found on server');
+        return;
+      }
+      sendHtml(res, 200, html);
+    });
+    return;
+  }
+
+  if (pathname === '/api/week/report' && req.method === 'POST') {
+    if (!isWriteAuthorized(req)) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    readJsonBody(req, 512 * 1024, (err, data) => {
+      if (err) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
+      const id = typeof data.id === 'string' && data.id.trim() ? data.id.trim().slice(0, 64) : null;
+      if (!id) {
+        sendJson(res, 400, { error: 'missing "id"' });
+        return;
+      }
+      if (!weekReports[id] && Object.keys(weekReports).length >= MAX_PCS) {
+        sendJson(res, 403, { error: 'too many registered PCs' });
+        return;
+      }
+      const week = (w) =>
+        w && typeof w === 'object' && Array.isArray(w.apps)
+          ? { weekStart: String(w.weekStart || ''), apps: w.apps.slice(0, 200), customs: Array.isArray(w.customs) ? w.customs.slice(0, 100) : [] }
+          : null;
+      weekReports[id] = {
+        label: typeof data.label === 'string' && data.label ? data.label.slice(0, 60) : id,
+        current: week(data.current),
+        previous: week(data.previous),
+        utcOffsetMin: Number.isFinite(data.utcOffsetMin) ? data.utcOffsetMin : null,
+        today: typeof data.today === 'string' ? data.today : null,
+        receivedAt: Date.now(),
+      };
+      sendJson(res, 200, { ok: true });
+    });
+    return;
+  }
+
+  if (pathname === '/api/week' && req.method === 'GET') {
+    if (!isViewAuthorized(req, parsedUrl)) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    sendJson(res, 200, { pcs: weekReports, serverTime: Date.now() });
+    return;
+  }
+
+  if (pathname === '/api/schedule' && req.method === 'POST') {
+    if (!isWriteAuthorized(req)) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    readJsonBody(req, 512 * 1024, (err, data) => {
+      if (err) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
+      if (!data || typeof data.schedule !== 'object' || !data.schedule) {
+        sendJson(res, 400, { error: 'missing "schedule"' });
+        return;
+      }
+      scheduleData = data.schedule;
+      scheduleAt = Date.now();
+      sendJson(res, 200, { ok: true });
+    });
+    return;
+  }
+
+  if (pathname === '/api/schedule' && req.method === 'GET') {
+    if (!isViewAuthorized(req, parsedUrl)) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    sendJson(res, 200, { schedule: scheduleData, updatedAt: scheduleAt || null });
+    return;
+  }
+
+  if (pathname === '/dashboard-classic' && req.method === 'GET') {
     if (!isViewAuthorized(req, parsedUrl)) {
       sendPlain(res, 401, 'unauthorized (URLの末尾に ?token=閲覧用トークン を付けてください)');
       return;

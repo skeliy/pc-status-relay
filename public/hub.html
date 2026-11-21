@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>skeliy と とろ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* 1ページで「いま何をしているか」「予定」「今週の使い方」を見る。予定表(カレンダー)の見た目に合わせている */
+:root{
+  --bg:#ffffff; --card:#f6f7f9; --ink:#1f1f1f; --muted:#6b7177; --line:#e3e6ea; --accent:#1a73e8; --nowline:#ea4335; --chip:#eef0f3;
+  --online:#1e9e57; --on-accent:#fff; --afk:#e0a100; --custom:#8a5cf6; --bar:#1a73e8; --bar-bg:#e8ebef;
+  --font:"Noto Sans JP","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  --class:#33b679; --test:#d50000; --study:#3f51b5; --gym:#f4511e; --meal:#f6bf26; --busy:#8e8e8e; --move:#8e8e8e; --brk:#e6f4ea; --brk-ink:#1e7a46; --free:#e9e4fb; --free-ink:#5b45b0; --sleep:#eceff3; --sleep-ink:#6b7480;
+  --hour:44px; --gutter:44px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111317; --card:#1a1d22; --ink:#e8eaed; --muted:#9aa0a6; --line:#2b2f35; --accent:#8ab4f8; --nowline:#f28b82; --chip:#22262b;
+    --online:#3ddc84; --on-accent:#0b1220; --afk:#f5b301; --custom:#b49cff; --bar:#5b8cff; --bar-bg:#2a2f37;
+    --class:#2e9e69; --test:#c62828; --study:#5c6bc0; --gym:#e8622f; --meal:#d8a91a; --busy:#6f7378; --move:#6f7378; --brk:#1d3326; --brk-ink:#7fd1a2; --free:#2a2546; --free-ink:#b9a8ff; --sleep:#1c2026; --sleep-ink:#8a939e;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111317; --card:#1a1d22; --ink:#e8eaed; --muted:#9aa0a6; --line:#2b2f35; --accent:#8ab4f8; --nowline:#f28b82; --chip:#22262b;
+  --online:#3ddc84; --on-accent:#0b1220; --afk:#f5b301; --custom:#b49cff; --bar:#5b8cff; --bar-bg:#2a2f37;
+  --class:#2e9e69; --test:#c62828; --study:#5c6bc0; --gym:#e8622f; --meal:#d8a91a; --busy:#6f7378; --move:#6f7378; --brk:#1d3326; --brk-ink:#7fd1a2; --free:#2a2546; --free-ink:#b9a8ff; --sleep:#1c2026; --sleep-ink:#8a939e;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.5}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+.wrap{max-width:920px;margin:0 auto;padding:12px 16px 40px}
+
+.top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 12px}
+.top h1{font-size:18px;margin:0;font-weight:700}
+.top .upd{font-size:11px;color:var(--muted)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--bg)}
+.seg button{padding:4px 12px;border-radius:999px;font-size:13px;color:var(--muted);white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);font-weight:700}
+
+/* いま */
+.now{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:18px}
+.pc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;min-width:0;cursor:pointer;text-align:left;width:100%}
+.pc[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.pc .who{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.dot.on{background:var(--online)} .dot.afk{background:var(--afk)} .dot.custom{background:var(--custom)}
+.pc .for{margin-left:auto;font-size:11px;color:var(--muted);font-weight:400}
+.pc .main{font-size:20px;font-weight:700;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pc .main.off{color:var(--muted);font-size:16px}
+.pc .sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:18px}
+.pc .plan{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pc .plan i{width:9px;height:9px;border-radius:3px;display:inline-block;flex:none}
+.pc .plan .nx{color:var(--muted)}
+
+h2{font-size:15px;margin:22px 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+h2 .hint{font-size:11.5px;color:var(--muted);font-weight:400}
+h2 .seg{margin-left:auto}
+
+/* 予定(カレンダー) */
+.cal{border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.bar{display:flex;align-items:center;gap:6px;padding:8px 8px 8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bar .today{border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:13px}
+.bar .arrow{width:30px;height:30px;border-radius:50%;font-size:18px;color:var(--muted)}
+.bar .arrow:hover{background:var(--chip)}
+.bar .range{font-size:14px;font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:80px}
+.bar .seg button{padding:3px 9px}
+.head{display:grid;grid-template-columns:var(--gutter) repeat(var(--n),1fr);border-bottom:1px solid var(--line)}
+.head .tz{font-size:10px;color:var(--muted);align-self:end;padding:0 4px 6px;text-align:right}
+.head .dh{text-align:center;padding:4px 0;border-left:1px solid var(--line);min-width:0}
+.head .dw{font-size:11px;color:var(--muted)}
+.head .dn{font-size:18px;line-height:30px;width:30px;height:30px;margin:0 auto;border-radius:50%}
+.head .today .dw{color:var(--accent)} .head .today .dn{background:var(--accent);color:var(--on-accent)}
+.head .ad{display:block;margin:2px 3px 0;font-size:10px;border-radius:4px;background:var(--test);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.head .tbd{display:block;font-size:10px;color:var(--muted)}
+.scroll{max-height:min(60vh,460px);overflow-y:auto;overflow-x:hidden;position:relative}
+.grid{display:grid;grid-template-columns:var(--gutter) repeat(var(--n),1fr);position:relative}
+.hours{position:relative;height:calc(var(--hour)*24)}
+.hours span{position:absolute;right:6px;font-size:10px;color:var(--muted);transform:translateY(-7px)}
+.col{position:relative;height:calc(var(--hour)*24);border-left:1px solid var(--line);background-image:linear-gradient(var(--line) 1px,transparent 1px);background-size:100% var(--hour);min-width:0}
+.col.empty{background-color:color-mix(in srgb,var(--chip) 60%,transparent)}
+.ev{position:absolute;left:2px;right:3px;border-radius:5px;padding:2px 5px;overflow:hidden;color:#fff;font-size:11.5px;line-height:1.3;border:1px solid var(--bg)}
+.ev b{display:block;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev small{font-size:10.5px;opacity:.92;white-space:nowrap}
+.ev.free{background:var(--free);color:var(--free-ink)} .ev.brk{background:var(--brk);color:var(--brk-ink)} .ev.sleep{background:var(--sleep);color:var(--sleep-ink)} .ev.meal{color:#3b2f00}
+.nowline{position:absolute;left:-1px;right:0;height:2px;background:var(--nowline);z-index:3}
+.nowline::before{content:"";position:absolute;left:-5px;top:-4px;width:10px;height:10px;border-radius:50%;background:var(--nowline)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 12px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.nocal{padding:18px;color:var(--muted);font-size:13px}
+
+/* 今週の使い方 */
+.week{border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.week .sum{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.week .sum b{font-size:16px}
+.week .sum span{font-size:12px;color:var(--muted)}
+.app{padding:9px 0;border-top:1px solid var(--line)}
+.app:first-of-type{border-top:0}
+.app .row{display:flex;align-items:baseline;gap:8px;width:100%;text-align:left}
+.app .nm{font-weight:700;font-size:15px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app .nm .tag{font-size:10.5px;font-weight:500;color:var(--custom);border:1px solid var(--custom);border-radius:999px;padding:0 6px;margin-left:6px;vertical-align:2px}
+.app .tm{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px;white-space:nowrap}
+.app .meter{height:6px;border-radius:99px;background:var(--bar-bg);margin-top:6px;overflow:hidden}
+.app .meter i{display:block;height:100%;border-radius:99px;background:var(--bar)}
+.app.custom .meter i{background:var(--custom)}
+.app .more{font-size:12px;color:var(--accent);margin-top:4px;padding:2px 0}
+.app ul{list-style:none;margin:6px 0 0;padding:6px 0 0;border-top:1px dashed var(--line)}
+.app li{display:flex;gap:10px;font-size:12.5px;color:var(--muted);padding:2px 0}
+.app li span:first-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.empty-note{color:var(--muted);font-size:13px;padding:6px 0}
+.foot{margin-top:24px;font-size:11px;color:var(--muted);text-align:center}
+@media (max-width:520px){
+  .wrap{padding:10px 12px 32px}
+  :root{--hour:40px;--gutter:36px}
+  .pc .main{font-size:18px}
+  .ev{padding:1px 3px;font-size:10.5px}
+  .bar .range{order:5;flex-basis:100%}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>skeliy と とろ</h1>
+      <div class="upd" id="upd">読み込み中…</div>
+    </div>
+    <div class="seg" role="group" aria-label="時間帯">
+      <button type="button" data-tz="Asia/Tokyo">日本時間</button>
+      <button type="button" data-tz="America/Toronto">Waterloo</button>
+    </div>
+  </div>
+
+  <div class="now" id="now" aria-live="polite"></div>
+
+  <h2 id="calTitle">予定</h2>
+  <div class="cal">
+    <div class="bar">
+      <button type="button" class="today" id="goToday">今日</button>
+      <button type="button" class="arrow" id="prev" aria-label="前へ">‹</button>
+      <button type="button" class="arrow" id="next" aria-label="次へ">›</button>
+      <div class="range" id="range"></div>
+      <div class="seg" role="group" aria-label="表示する日数">
+        <button type="button" data-n="1">日</button>
+        <button type="button" data-n="3">3日</button>
+        <button type="button" data-n="7">週</button>
+      </div>
+    </div>
+    <div id="calBody">
+      <div class="head" id="head"></div>
+      <div class="scroll" id="scroll"><div class="grid" id="grid"></div></div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
+  <h2><span id="weekTitle">今週の使い方</span><span class="hint">日曜の夜で区切ります。AFK の時間は入りません</span>
+    <span class="seg" role="group" aria-label="週">
+      <button type="button" data-w="current">今週</button>
+      <button type="button" data-w="previous">先週</button>
+    </span>
+  </h2>
+  <div class="week" id="week"></div>
+
+  <div class="foot">上のカードを押すと、その人の予定と使い方に切り替わります</div>
+</div>
+
+<script>
+(function(){
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k){ try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch (e) {} } };
+
+/* ---------- アプリの名前を分かりやすくする ---------- */
+// 実行ファイル名(小文字・.exe なし) -> 表示名。null はウィンドウのタイトルを名前に使う
+const KNOWN = {
+  searchhost: 'Windows（スタート・検索）', startmenuexperiencehost: 'Windows（スタート・検索）', shellexperiencehost: 'Windows（スタート・検索）',
+  shellhost: 'Windows（スタート・検索）', lockapp: 'ロック画面', textinputhost: 'Windows（スタート・検索）', searchapp: 'Windows（スタート・検索）',
+  explorer: 'エクスプローラー', taskmgr: 'タスクマネージャー', systemsettings: '設定', applicationframehost: null, 'windowsterminal': 'ターミナル',
+  cmd: 'コマンドプロンプト', powershell: 'PowerShell', pwsh: 'PowerShell', conhost: 'コマンドプロンプト', openconsole: 'ターミナル',
+  notepad: 'メモ帳', mspaint: 'ペイント', snippingtool: '切り取りツール', screenclippinghost: '切り取りツール', calculatorapp: '電卓',
+  'microsoft.photos': 'フォト', photos: 'フォト', msedgewebview2: null, electron: null,
+  chrome: 'Chrome', brave: 'Brave', msedge: 'Edge', firefox: 'Firefox', opera: 'Opera', opera_gx: 'Opera GX', arc: 'Arc', vivaldi: 'Vivaldi',
+  discord: 'Discord', discordcanary: 'Discord', discordptb: 'Discord', spotify: 'Spotify', line: 'LINE', linecall: 'LINE',
+  teams: 'Teams', 'ms-teams': 'Teams', zoom: 'Zoom', slack: 'Slack', telegram: 'Telegram', whatsapp: 'WhatsApp',
+  winword: 'Word', excel: 'Excel', powerpnt: 'PowerPoint', onenote: 'OneNote', outlook: 'Outlook', olk: 'Outlook', acrobat: 'Acrobat', acrord32: 'Acrobat',
+  code: 'VS Code', cursor: 'Cursor', devenv: 'Visual Studio', idea64: 'IntelliJ IDEA', pycharm64: 'PyCharm', 'android studio': 'Android Studio', studio64: 'Android Studio',
+  claude: 'Claude', chatgpt: 'ChatGPT', obs64: 'OBS', vlc: 'VLC', 'notion': 'Notion', obsidian: 'Obsidian', figma: 'Figma',
+  steam: 'Steam', steamwebhelper: 'Steam', epicgameslauncher: 'Epic Games', 'epicwebhelper': 'Epic Games', riotclientservices: 'Riot Client', riotclientux: 'Riot Client',
+  'riot client': 'Riot Client', battle_net: 'Battle.net', 'battle.net': 'Battle.net', eadesktop: 'EA app', ubisoftconnect: 'Ubisoft Connect', overwolf: 'Overwolf',
+  lghub: 'Logitech G HUB', 'nvidia app': 'NVIDIA', nvcontainer: 'NVIDIA', wootility: 'Wootility', playit: 'playit.gg', syncthing: 'Syncthing', tailscale: 'Tailscale', nordvpn: 'NordVPN',
+  'valorant-win64-shipping': 'VALORANT', valorant: 'VALORANT', 'fortniteclient-win64-shipping': 'Fortnite', 'minecraft.windows': 'Minecraft', minecraft: 'Minecraft',
+  'smalland-win64-shipping': 'Smalland', 'wayofthehunter-win64-shipping': 'Way of the Hunter', 'palworld-win64-shipping': 'Palworld',
+  robloxplayerbeta: 'Roblox', genshinimpact: '原神', starrail: '崩壊：スターレイル', zenlesszonezero: 'ゼンレスゾーンゼロ', 'client-win64-shipping': null,
+  leagueclientux: 'League of Legends', 'league of legends': 'League of Legends', leagueclient: 'League of Legends', r5apex: 'Apex Legends', r5apex_dx12: 'Apex Legends',
+  cs2: 'Counter-Strike 2', overwatch: 'Overwatch 2', rocketleague: 'Rocket League', eldenring: 'ELDEN RING', 'osu!': 'osu!', osu: 'osu!', osulazer: 'osu!', 'whatsapp.root': 'WhatsApp',
+  'among us': 'Among Us', terraria: 'Terraria', stardew_valley: 'Stardew Valley', 'stardew valley': 'Stardew Valley', rainbowsix: 'Rainbow Six Siege', destiny2: 'Destiny 2',
+  pythonw: 'Python', python: 'Python', node: 'Node.js', 'lyrics overlay': '歌詞オーバーレイ', lyricsoverlay: '歌詞オーバーレイ'
+};
+const GENERIC = /^(client|game|launcher|app|main|start|bin|win64|win32|x64)$/i;
+// タイトルの最後に付く「 - アプリ名」(Edge は「 - 個人 - Microsoft Edge」)を取る
+const APP_TAIL = /\s[-–—]\s(?:(?:個人|Personal|職場|Work)\s[-–—]\s)?(Google Chrome|Brave|Microsoft\s?Edge|Mozilla Firefox|Firefox|Opera|Vivaldi|Arc|Discord|Visual Studio Code|Cursor|Notion|Obsidian|Spotify( Premium)?)$/;
+function cleanTitle(t){
+  if (!t) return '';
+  let s = String(t).replace(/[​‎‏]/g, '').trim();
+  s = s.replace(APP_TAIL, '').trim();
+  return s;
+}
+function prettyBase(b){
+  let s = b.replace(/[-_ ]?(Win64|WinGDK|Win32)?[-_ ]?Shipping$/i, '').replace(/[-_ ](x64|x86|DX11|DX12|BE|EAC)$/i, '').replace(/[-_]?(64|32)$/,'');
+  s = s.replace(/[_]+/g, ' ').trim();
+  if (!s || GENERIC.test(s)) return '';
+  if (/^[A-Z0-9 ]+$/.test(s) && /[A-Z]{4,}/.test(s)) s = s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()); // SMALLAND -> Smalland
+  else if (!/\s/.test(s) && /[a-z][A-Z]/.test(s)) s = s.replace(/([a-z])([A-Z])/g, '$1 $2');           // WayOfTheHunter -> Way Of The Hunter
+  return s;
+}
+// 1つの状態(実行ファイル名・ウィンドウのタイトル)を、画面に出す名前にする
+function appName(exe, title){
+  const raw = String(exe || '').trim();
+  const base = raw.replace(/\.exe$/i, '');
+  const key = base.toLowerCase();
+  const t = cleanTitle(title);
+  if (key === 'javaw' || key === 'java') return /minecraft/i.test(title || '') ? 'Minecraft' : 'Java';
+  if (Object.prototype.hasOwnProperty.call(KNOWN, key)) {
+    const v = KNOWN[key];
+    if (v) return v;
+    return t && t.length <= 40 ? t : (key === 'applicationframehost' ? 'Windows のアプリ' : (prettyBase(base) || t || '不明'));
+  }
+  if (!base) return t || '不明';
+  return prettyBase(base) || (t && t.length <= 40 ? t : base);
+}
+
+/* ---------- 時間・日付 ---------- */
+function dur(sec){
+  sec = Math.max(0, Math.round(sec || 0));
+  if (sec < 60) return '1分未満';
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
+  return h ? h + '時間' + (m ? m + '分' : '') : m + '分';
+}
+const DOW = ['日','月','火','水','木','金','土'];
+function offsetMin(zone, ms){ const p = new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date(ms)); const g=(t)=>+p.find((x)=>x.type===t).value; let h=g('hour'); if(h===24)h=0; return (Date.UTC(g('year'),g('month')-1,g('day'),h,g('minute'))-Math.floor(ms/6e4)*6e4)/6e4; }
+function utcDay(ds){ const [y,m,d]=ds.split('-').map(Number); return Date.UTC(y,m-1,d); }
+function addDays(ds,k){ return new Date(utcDay(ds)+k*864e5).toISOString().slice(0,10); }
+function localToAbs(zone,ds,min){ const guess=utcDay(ds)+min*6e4; return guess-offsetMin(zone,guess)*6e4; }
+function absToLocal(zone,ms){ const off=offsetMin(zone,ms); const t=new Date(ms+off*6e4); return {date:t.toISOString().slice(0,10),min:t.getUTCHours()*60+t.getUTCMinutes()}; }
+function hm(m){ return Math.floor(m/60)+':'+String(m%60).padStart(2,'0'); }
+function dow(ds){ return new Date(utcDay(ds)).getUTCDay(); }
+const md = (ds) => (+ds.slice(5,7)) + '/' + (+ds.slice(8)) + '（' + DOW[dow(ds)] + '）';
+
+/* ---------- 状態 ---------- */
+let tz = store.get('hub-tz') || 'Asia/Tokyo';
+let who = store.get('hub-who') || 'skeliy';
+let n = +(store.get('hub-n') || 0) || (window.innerWidth < 640 ? 3 : 7);
+let wsel = 'current';
+let start = null;
+let status = null, weeks = null, sched = null, schedAt = null;
+const openApps = new Set();
+
+// 中継サーバーの PC(pc1 など)と、予定表の人(skeliy / toro)を名前で結び付ける
+function personOf(label){ const s = String(label || '').toLowerCase(); if (s.includes('skeliy')) return 'skeliy'; if (s.includes('toro') || s.includes('とろ')) return 'toro'; return null; }
+const NAME = { skeliy: 'skeliy', toro: 'とろ' };
+
+/* ---------- 予定表 ---------- */
+const CAT = {class:'授業',test:'テスト',study:'勉強',gym:'筋トレ',meal:'ご飯',busy:'用事',move:'移動',brk:'休み時間',free:'自由時間',sleep:'睡眠'};
+const NOWTXT = {class:'授業中',test:'テスト中',study:'勉強中',gym:'筋トレ中',meal:'ご飯中',busy:'用事中',move:'移動中',brk:'休み時間（学校）',free:'自由時間',sleep:'寝ています'};
+const LEGEND = {skeliy:['class','test','study','meal','free','sleep'],toro:['class','test','move','brk']};
+const SOFT = {free:['--free','--free-ink'],sleep:['--sleep','--sleep-ink'],brk:['--brk','--brk-ink']};
+let P = {};
+function buildPeople(){
+  P = {};
+  if (!sched) return;
+  Object.keys(sched).forEach((k) => { const S = sched[k]; if (!S || !S.data) return; const abs=[], known=[], allday=[];
+    Object.keys(S.data).sort().forEach((ds) => (S.data[ds] || []).forEach(([s,e,c,l]) => { const a=localToAbs(S.tz,ds,s), b=localToAbs(S.tz,ds,e); const last=abs[abs.length-1];
+      if (last && last.c===c && last.b===a && !l && !last.l) last.b=b; else abs.push({a,b,c,l}); }));
+    (S.known || []).forEach((ds) => known.push([localToAbs(S.tz,ds,0),localToAbs(S.tz,ds,1440)]));
+    if (S.range) known.push([localToAbs(S.tz,S.range[0],0),localToAbs(S.tz,S.range[1],1440)]);
+    Object.keys(S.allday || {}).forEach((ds) => allday.push({a:localToAbs(S.tz,ds,0),b:localToAbs(S.tz,ds,1440),l:S.allday[ds]}));
+    P[k] = {abs,known,allday,empty:k==='toro'?'授業なし':'予定未定'}; });
+}
+const fmtAbs = (ms) => hm(absToLocal(tz,ms).min);
+const whenAbs = (ms) => { const L=absToLocal(tz,ms), T=absToLocal(tz,Date.now()); return (L.date===T.date?'':(L.date===addDays(T.date,1)?'明日 ':md(L.date)+' '))+hm(L.min); };
+const lab = (x) => x.l || CAT[x.c];
+const colorOf = (c) => SOFT[c] ? 'var('+SOFT[c][1]+')' : 'var(--'+c+')';
+function planNow(k){
+  const X = P[k]; if (!X) return '';
+  const now = Date.now(); const cur = X.abs.find((x) => x.a<=now && now<x.b);
+  if (!cur) { const ad = X.allday.find((x) => x.a<=now && now<x.b); const known = X.known.some(([a,b]) => a<=now && now<b); const nx = X.abs.find((x) => x.a>now);
+    return '<i style="background:var(--muted)"></i><span>予定: <b>'+esc(ad ? '今日は'+ad.l : (known ? X.empty : '予定未定'))+'</b></span>'+(nx && known ? '<span class="nx">次は'+esc(lab(nx))+' '+whenAbs(nx.a)+'〜</span>' : ''); }
+  const nx = X.abs[X.abs.indexOf(cur)+1];
+  const txt = cur.c==='class' && cur.l ? cur.l+'中' : NOWTXT[cur.c];
+  return '<i style="background:'+colorOf(cur.c)+'"></i><span>予定: <b>'+esc(txt)+'</b>（'+fmtAbs(cur.b)+'まで）</span>'+(nx ? '<span class="nx">次は'+esc(lab(nx))+' '+whenAbs(nx.a)+'〜</span>' : '');
+}
+function dayView(ds){
+  const X = P[who]; const a0=localToAbs(tz,ds,0), b0=localToAbs(tz,ds,1440); const segs=[];
+  X.abs.forEach((x) => { if (x.b<=a0 || x.a>=b0) return; segs.push({s:(Math.max(x.a,a0)-a0)/6e4,e:(Math.min(x.b,b0)-a0)/6e4,c:x.c,l:x.l,a:x.a,b:x.b}); });
+  const ad = X.allday.filter((x) => { const ov=Math.min(x.b,b0)-Math.max(x.a,a0); return ov>=(x.b-x.a)/2; }).map((x) => x.l);
+  return {segs,covered:X.known.some(([a,b]) => a<b0 && b>a0),ad};
+}
+function renderCal(){
+  document.querySelectorAll('[data-n]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.n===n)));
+  $('calTitle').textContent = (NAME[who] || who) + ' の予定';
+  if (!P[who]) {
+    $('range').textContent = '';
+    $('calBody').innerHTML = '<div class="nocal">'+(sched ? 'この人の予定表はありません。' : '予定表はまだ届いていません（skeliy の PC から数分で届きます）。')+'</div>';
+    return;
+  }
+  if (!$('head')) $('calBody').innerHTML = '<div class="head" id="head"></div><div class="scroll" id="scroll"><div class="grid" id="grid"></div></div><div class="legend" id="legend"></div>';
+  const today = absToLocal(tz, Date.now());
+  if (!start) start = (n===7) ? addDays(today.date, -((dow(today.date)+6)%7)) : today.date;
+  const days = [...Array(n)].map((_,k) => addDays(start,k));
+  document.documentElement.style.setProperty('--n', n);
+  const [y,m] = days[0].split('-').map(Number), [y2,m2] = days[n-1].split('-').map(Number);
+  $('range').textContent = (y===y2 && m===m2) ? y+'年'+m+'月' : y+'年'+m+'月〜'+(y!==y2?y2+'年':'')+m2+'月';
+  const info = days.map(dayView);
+  $('head').innerHTML = '<div class="tz">'+(tz==='Asia/Tokyo'?'JST':'ET')+'</div>'+days.map((d,k) => '<div class="dh'+(d===today.date?' today':'')+'"><div class="dw">'+DOW[dow(d)]+'</div><div class="dn">'+(+d.slice(8))+'</div>'+info[k].ad.map((t) => '<span class="ad">'+esc(t)+'</span>').join('')+(info[k].covered?'':'<span class="tbd">未定</span>')+'</div>').join('');
+  const H = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hour'));
+  let html = '<div class="hours">'+[...Array(24)].map((_,h) => h ? '<span style="top:'+h*H+'px">'+h+':00</span>' : '').join('')+'</div>';
+  days.forEach((d,k) => { const V = info[k];
+    html += '<div class="col'+(V.covered?'':' empty')+'">';
+    V.segs.forEach((x) => { const top=x.s/60*H, h=Math.max((x.e-x.s)/60*H-2,3);
+      const label = h>=28 ? '<b>'+esc(lab(x))+'</b><small>'+fmtAbs(x.a)+'〜'+fmtAbs(x.b)+'</small>' : (h>=14 ? '<b>'+esc(lab(x))+'</b>' : '');
+      const bg = SOFT[x.c] ? '' : 'background:var(--'+x.c+');';
+      html += '<div class="ev '+x.c+'" style="top:'+(top+1)+'px;height:'+h+'px;'+bg+'" title="'+esc(lab(x))+' '+fmtAbs(x.a)+'〜'+fmtAbs(x.b)+'">'+label+'</div>'; });
+    if (d===today.date) html += '<div class="nowline" style="top:'+(today.min/60*H)+'px"></div>';
+    html += '</div>'; });
+  $('grid').innerHTML = html;
+  $('legend').innerHTML = (LEGEND[who]||[]).map((k) => '<span><i style="background:'+colorOf(k)+'"></i>'+CAT[k]+'</span>').join('')+(who==='toro'?'<span>授業の前後30分は移動です</span>':'')+'<span>予定は目安です</span>';
+}
+function scrollToNow(){ const sc=$('scroll'); if (!sc) return; const H=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hour')); const t=absToLocal(tz,Date.now()).min; sc.scrollTop=Math.max(0,t/60*H-H*2); }
+
+/* ---------- いま ---------- */
+function pcList(){
+  const pcs = (status && status.pcs) || {}; const order = (status && status.order) || Object.keys(pcs);
+  const list = order.filter((id) => pcs[id]).map((id) => ({ id, s: pcs[id], person: personOf(pcs[id].label) }));
+  // 予定表にいる人で、PC がまだ一度も届いていない人もカードを出す
+  ['skeliy','toro'].forEach((k) => { if (!list.some((x) => x.person===k) && P[k]) list.push({ id: null, s: null, person: k }); });
+  const rank = (x) => x.person==='skeliy' ? 0 : x.person==='toro' ? 1 : 2;
+  return list.sort((a,b) => rank(a)-rank(b));
+}
+function selKey(x){ return x.person || ('pc:'+x.id); }
+function renderNow(){
+  const list = pcList();
+  if (!list.some((x) => selKey(x)===who) && list.length) who = selKey(list[0]);
+  $('now').innerHTML = list.map((x) => {
+    const s = x.s; const on = !!(s && s.online);
+    let dot = on ? 'on' : '', main, sub = '';
+    if (!s) { main = 'PC Status の情報なし'; }
+    else if (!on) { main = 'オフライン'; sub = s.lastSeenSecondsAgo != null ? dur(s.lastSeenSecondsAgo)+'前まで' : ''; }
+    else if (s.isCustom) { dot = 'custom'; main = s.status || 'カスタム'; sub = typeof s.customRemainingSeconds==='number' ? 'あと'+Math.max(1,Math.ceil(s.customRemainingSeconds/60))+'分' : ''; }
+    else if (s.isAfk) { dot = 'afk'; main = 'AFK'; sub = s.durationSeconds ? dur(s.durationSeconds)+'操作なし' : ''; }
+    else { main = appName(s.processName, s.status); const t = cleanTitle(s.status); sub = (t && t.toLowerCase()!==main.toLowerCase() ? t : ''); if (s.durationSeconds) sub = (sub ? sub+' · ' : '') + dur(s.durationSeconds); }
+    const name = x.person ? NAME[x.person] : (s && s.label) || x.id;
+    const plan = x.person && P[x.person] ? '<div class="plan">'+planNow(x.person)+'</div>' : '';
+    return '<button type="button" class="pc" data-sel="'+esc(selKey(x))+'" aria-pressed="'+(selKey(x)===who)+'">'+
+      '<div class="who"><span class="dot '+dot+'"></span>'+esc(name)+(s && s.label && x.person ? '<span class="for">'+esc(s.label)+'</span>' : '')+'</div>'+
+      '<div class="main'+(on?'':' off')+'">'+esc(main)+'</div><div class="sub">'+esc(sub)+'</div>'+plan+'</button>';
+  }).join('') || '<div class="empty-note">まだ誰の PC からも届いていません。</div>';
+  document.querySelectorAll('.pc[data-sel]').forEach((b) => b.onclick = () => { who = b.dataset.sel; store.set('hub-who', who); start = null; renderAll(); scrollToNow(); });
+}
+
+/* ---------- 今週の使い方 ---------- */
+function reportFor(sel){
+  const pcs = (weeks && weeks.pcs) || {};
+  const ids = Object.keys(pcs).filter((id) => sel.startsWith('pc:') ? 'pc:'+id===sel : personOf(pcs[id].label)===sel);
+  return ids.length ? pcs[ids[0]] : null;
+}
+function renderWeek(){
+  document.querySelectorAll('[data-w]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.w===wsel)));
+  const nm = NAME[who] || (who.startsWith('pc:') ? (((status&&status.pcs)||{})[who.slice(3)]||{}).label || who.slice(3) : who);
+  $('weekTitle').textContent = nm + ' の' + (wsel==='current' ? '今週' : '先週') + 'の使い方';
+  const r = reportFor(who); const w = r && r[wsel];
+  if (!r) { $('week').innerHTML = '<div class="empty-note">まだ記録が届いていません。PC Status が新しい版になると、1分ごとに届くようになります。</div>'; return; }
+  if (!w || !w.apps) { $('week').innerHTML = '<div class="empty-note">'+(wsel==='previous' ? '先週の記録はありません。' : '今週の記録はまだありません。')+'</div>'; return; }
+  // 同じ名前になるアプリ(Chrome の別プロセス、Windows の画面いろいろ など)はまとめる
+  const groups = new Map();
+  w.apps.forEach((a) => { const name = appName(a.exe, (a.titles && a.titles[0] && a.titles[0][0]) || '');
+    const g = groups.get(name) || { name, sec: 0, titles: new Map(), custom: false }; g.sec += a.sec || 0;
+    (a.titles || []).forEach(([t,s]) => { const ct = cleanTitle(t) || t; g.titles.set(ct, (g.titles.get(ct)||0) + s); });
+    groups.set(name, g); });
+  (w.customs || []).forEach(([t,s]) => { const name = t; const g = groups.get('c:'+name) || { name, sec: 0, titles: new Map(), custom: true }; g.sec += s; groups.set('c:'+name, g); });
+  const list = [...groups.values()].filter((g) => g.sec >= 30).sort((a,b) => b.sec-a.sec);
+  const total = list.reduce((s,g) => s+g.sec, 0); const max = list.length ? list[0].sec : 1;
+  const end = w.weekStart ? addDays(w.weekStart, 6) : null;
+  let html = '<div class="sum"><b>'+dur(total)+'</b><span>'+(w.weekStart ? md(w.weekStart)+' 〜 '+md(end) : '')+(r.receivedAt && wsel==='current' ? ' · '+new Date(r.receivedAt).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})+' 更新' : '')+'</span></div>';
+  if (!list.length) html += '<div class="empty-note">まだ記録はありません。</div>';
+  list.forEach((g) => { const key = (g.custom?'c:':'')+g.name; const open = openApps.has(key);
+    const titles = [...g.titles.entries()].filter(([t]) => t && t.toLowerCase()!==g.name.toLowerCase()).sort((a,b) => b[1]-a[1]).slice(0,12);
+    html += '<div class="app'+(g.custom?' custom':'')+'"><div class="row"><span class="nm">'+esc(g.name)+(g.custom?'<span class="tag">カスタム</span>':'')+'</span><span class="tm">'+dur(g.sec)+'</span></div>'+
+      '<div class="meter"><i style="width:'+Math.max(2, g.sec/max*100).toFixed(1)+'%"></i></div>'+
+      (titles.length ? '<button type="button" class="more" data-app="'+esc(key)+'">'+(open?'内訳を閉じる':'内訳を見る（何を見ていたか）')+'</button>' : '')+
+      (open && titles.length ? '<ul>'+titles.map(([t,s]) => '<li><span>'+esc(t)+'</span><span>'+dur(s)+'</span></li>').join('')+'</ul>' : '')+'</div>'; });
+  $('week').innerHTML = html;
+  document.querySelectorAll('.more[data-app]').forEach((b) => b.onclick = () => { const k=b.dataset.app; if (openApps.has(k)) openApps.delete(k); else openApps.add(k); renderWeek(); });
+}
+
+/* ---------- まとめて描く ---------- */
+function renderAll(){
+  document.querySelectorAll('[data-tz]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tz===tz)));
+  renderNow(); renderCal(); renderWeek();
+  $('upd').textContent = status ? new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})+' 更新' : '読み込み中…';
+}
+async function get(path){
+  const u = new URL(path, location.origin); if (TOKEN) u.searchParams.set('token', TOKEN);
+  const r = await fetch(u.toString(), { cache: 'no-store' }); if (!r.ok) throw new Error(r.status); return r.json();
+}
+async function pollStatus(){ try { status = await get('/api/status'); renderNow(); $('upd').textContent = new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})+' 更新'; } catch (e) { $('upd').textContent = 'サーバーに繋がりません（再試行中）'; } }
+async function pollWeek(){ try { weeks = await get('/api/week'); renderWeek(); } catch (e) {} }
+async function pollSched(){ try { const d = await get('/api/schedule'); const first = !sched && d.schedule; sched = d.schedule; schedAt = d.updatedAt; buildPeople(); renderNow(); renderCal(); if (first) scrollToNow(); } catch (e) {} }
+
+document.querySelectorAll('[data-tz]').forEach((b) => b.onclick = () => { tz = b.dataset.tz; store.set('hub-tz', tz); start = null; renderAll(); scrollToNow(); });
+document.querySelectorAll('[data-n]').forEach((b) => b.onclick = () => { n = +b.dataset.n; store.set('hub-n', n); start = null; renderCal(); });
+document.querySelectorAll('[data-w]').forEach((b) => b.onclick = () => { wsel = b.dataset.w; renderWeek(); });
+$('goToday').onclick = () => { start = null; renderCal(); scrollToNow(); };
+$('prev').onclick = () => { if (!start) return; start = addDays(start, -n); renderCal(); };
+$('next').onclick = () => { if (!start) return; start = addDays(start, n); renderCal(); };
+
+window.__hub = { appName, cleanTitle };
+renderAll();
+Promise.all([pollStatus(), pollWeek(), pollSched()]).then(() => { renderAll(); scrollToNow(); });
+setInterval(pollStatus, 5000);
+setInterval(pollWeek, 60000);
+setInterval(pollSched, 300000);
+setInterval(() => { renderNow(); renderCal(); }, 60000);
+})();
+</script>
+</body>
+</html>
