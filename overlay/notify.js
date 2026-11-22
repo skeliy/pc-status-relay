@@ -26,7 +26,9 @@ const SIZE = { voice: { width: 380, height: 132 }, game: { width: 320, height: 9
 
 function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appLang, dir, testMode }) {
   const statePath = () => path.join(app.getPath('userData'), 'companion.json');
-  let me = { id: null, key: null, discordId: null, sig: null, me: null, label: '', lang: '' };
+  // names: 拡張機能の名前(ext)・PC Status の名前(pc)。client / pc は拡張機能と PC Status の番号
+  // (中継サーバーが「前に一緒に聴いたことのある人」を探すのに使う)
+  let me = { id: null, key: null, discordId: null, sig: null, me: null, label: '', lang: '', names: {}, client: null, pc: null };
   let relayOk = null; // null = まだ分からない / true / false
   let approved = false;
   let since = 0;
@@ -35,7 +37,7 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
   let cards = []; // { win, kind, height }
   let soundWin = null;
   let helper = null;
-  let sentLabel = null;
+  let sentKey = null; // 最後に中継サーバーへ送った名前など(変わったら送り直す)
 
   const lang = () => (me.lang === 'ja' || me.lang === 'en' ? me.lang : appLang());
   const T = (j, e) => (lang() === 'ja' ? j : e);
@@ -50,6 +52,8 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
       me = Object.assign(me, JSON.parse(fs.readFileSync(statePath(), 'utf8')));
     } catch (e) {}
     approved = !!me.discordId;
+    me.names = me.names && typeof me.names === 'object' ? me.names : {};
+    if (me.label && !me.names.ext) me.names.ext = me.label; // 1.3.0 までの覚え方
   }
   function save() {
     try {
@@ -70,9 +74,49 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
     return { status: res.status, data };
   }
 
+  const winUser = () => {
+    try {
+      return os.userInfo().username || '';
+    } catch (e) {
+      return '';
+    }
+  };
+  const displayName = () => me.names.ext || me.names.pc || winUser() || 'PC';
+  const profileKey = () => JSON.stringify([me.names.ext || '', me.names.pc || '', me.client || '', me.pc || '', lang()]);
+
+  // PC Status(エージェント)が動いていれば、その名前と番号を聞く(拡張機能から名前が届かない時の代わり)
+  async function askAgent() {
+    if (testMode && !process.env.LISTEN_TOGETHER_AGENT) return;
+    const base = process.env.LISTEN_TOGETHER_AGENT || 'http://127.0.0.1:8787';
+    try {
+      const res = await fetch(base + '/whoami', { signal: AbortSignal.timeout(1500) });
+      if (!res.ok) return;
+      const d = await res.json();
+      let changed = false;
+      const label = typeof d.label === 'string' ? d.label.trim().slice(0, 40) : '';
+      if (label && label !== me.names.pc) (me.names.pc = label), (changed = true);
+      if (typeof d.pc === 'string' && d.pc && d.pc !== me.pc) (me.pc = d.pc.slice(0, 80)), (changed = true);
+      if (changed) save();
+    } catch (e) {}
+  }
+
   async function hello() {
-    const label = me.label || os.userInfo().username || 'PC';
-    const r = await call('POST', '/api/companion/hello', { id: me.id, key: me.key, label, lang: lang(), discordId: me.discordId, sig: me.sig });
+    await askAgent();
+    const label = displayName();
+    const key = profileKey();
+    const r = await call('POST', '/api/companion/hello', {
+      id: me.id,
+      key: me.key,
+      label, // 古い中継サーバー向け
+      extLabel: me.names.ext || '',
+      pcLabel: me.names.pc || '',
+      winUser: winUser(),
+      client: me.client || '',
+      pc: me.pc || '',
+      lang: lang(),
+      discordId: me.discordId,
+      sig: me.sig,
+    });
     if (r.status === 403 && r.data.error === 'bad-key') {
       me.id = me.key = null; // 番号が使えなくなっていたら、新しく登録し直す
       return hello();
@@ -88,7 +132,7 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
     approved = !!r.data.approved;
     if (r.data.id !== me.lastId) since = 0; // 新しく登録し直した時だけ、受信箱を最初から読む
     me.lastId = r.data.id;
-    sentLabel = label;
+    sentKey = key;
     save();
     relayOk = true;
   }
@@ -96,13 +140,19 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
   async function loop() {
     let needHello = true;
     const startedAt = Date.now();
+    let askedAt = 0;
     for (;;) {
       if (!active()) {
         await sleep(3000);
         continue;
       }
       // はじめて登録する時は、拡張機能から名前が届くのを少し待つ(skeliy に届く知らせに、分かる名前を出すため)
-      if (!me.id && !me.label && Date.now() - startedAt < 60000) {
+      if (!me.id && !me.names.ext && !me.names.pc && Date.now() - startedAt < 60000) {
+        if (Date.now() - askedAt >= 10000) {
+          askedAt = Date.now();
+          await askAgent();
+          if (me.names.pc) continue;
+        }
         await sleep(1000);
         continue;
       }
@@ -314,23 +364,31 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
     startHelper();
   }
 
-  function setProfile({ label, lang: l }) {
+  // 拡張機能から届く: extLabel(拡張機能の名前)、label(古い拡張機能用。PC Status の名前のこともある)、
+  // pcLabel(PC Status の名前)、client / pc(番号)、lang
+  function setProfile(p) {
+    const { label, lang: l } = p || {};
     let changed = false;
-    if (typeof label === 'string' && label.trim() && label.trim().slice(0, 40) !== me.label) {
-      me.label = label.trim().slice(0, 40);
-      changed = true;
-    }
+    const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+    const ext = str(p && typeof p.extLabel === 'string' ? p.extLabel : label, 40); // 新しい拡張機能は extLabel を別に送る
+    if (ext && ext !== me.names.ext) (me.names.ext = ext), (me.label = ext), (changed = true);
+    const pcl = str(p && p.pcLabel, 40);
+    if (pcl && pcl !== me.names.pc) (me.names.pc = pcl), (changed = true);
+    const client = str(p && p.client, 80);
+    if (client && client !== me.client) (me.client = client), (changed = true);
+    const pc = str(p && p.pc, 80);
+    if (pc && pc !== me.pc) (me.pc = pc), (changed = true);
     if ((l === 'ja' || l === 'en') && l !== me.lang) {
       me.lang = l;
       changed = true;
     }
     if (changed) save();
     // 名前が変わったら、中継サーバーにも伝える(割り当てのページに新しい名前で出るように)
-    if (me.id && me.label && sentLabel !== null && me.label !== sentLabel) hello().catch(() => {});
+    if (me.id && sentKey !== null && profileKey() !== sentKey) hello().catch(() => {});
   }
 
   function test(kind) {
-    const who = me.me || { name: me.label || T('あなた', 'You'), avatar: null };
+    const who = me.me || { name: me.names.ext || me.names.pc || T('あなた', 'You'), avatar: null };
     if (kind === 'game') {
       notifyGameForce({ user: who, game: 'VALORANT' });
     } else {

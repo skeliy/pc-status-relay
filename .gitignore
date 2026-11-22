@@ -5,3 +5,5 @@ config.json
 week_log.json
 week_log.json.*
 schedule.json
+relay_backup.json
+relay_backup.json.*

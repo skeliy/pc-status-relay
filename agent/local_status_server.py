@@ -7,6 +7,7 @@ agent.py 実行中に、このPCのブラウザで http://127.0.0.1:<port>/ を�
 """
 
 import html
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -142,7 +143,7 @@ def _page_html(override, message=None):
 </html>"""
 
 
-def make_handler(override):
+def make_handler(override, whoami=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass  # コンソールを静かに保つ
@@ -161,6 +162,21 @@ def make_handler(override):
             self.end_headers()
 
         def do_GET(self):
+            if self.path.rstrip("/") == "/whoami" and whoami:
+                # Listen Together アプリ(同じ PC)が、この PC の名前を知るためのもの。
+                # ほかのサイトから覗かれないように、127.0.0.1 / localhost 宛ての時だけ答える(合言葉などは含めない)
+                host = (self.headers.get("Host") or "").split(":")[0].lower()
+                if host not in ("127.0.0.1", "localhost") or self.headers.get("Origin"):
+                    self._write_html("<p>not found</p>", status=404)
+                    return
+                body = json.dumps({"label": whoami.get("label") or "", "pc": whoami.get("pc") or ""}, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path.rstrip("/") in ("", ""):
                 self._write_html(_page_html(override))
             else:
@@ -192,9 +208,10 @@ def make_handler(override):
     return Handler
 
 
-def start_local_ui_server(override, port: int, host: str = "127.0.0.1"):
-    """バックグラウンドスレッドでローカルUIサーバーを起動して返す(ThreadingHTTPServerインスタンス)。"""
-    handler_cls = make_handler(override)
+def start_local_ui_server(override, port: int, host: str = "127.0.0.1", whoami=None):
+    """バックグラウンドスレッドでローカルUIサーバーを起動して返す(ThreadingHTTPServerインスタンス)。
+    whoami: {"label": PC の名前, "pc": PC の番号}。渡すと GET /whoami で答える"""
+    handler_cls = make_handler(override, whoami)
     httpd = ThreadingHTTPServer((host, port), handler_cls)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()

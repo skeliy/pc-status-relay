@@ -10,6 +10,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const rooms = require('./rooms');
 
 const GUILD_ID = process.env.DISCORD_GUILD_ID || '1377680403904598177';
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
@@ -24,6 +25,9 @@ const POLL_WAIT_MS = 25000;
 const QUEUE_TTL_MS = 2 * 60 * 1000;
 const MAX_COMPANIONS = 60;
 const GAME_REPEAT_MS = 10 * 60 * 1000; // 同じ人が同じゲームを、すぐ起動し直した時は知らせない
+// 新しく入れた人の名前が Windows のユーザー名(PC_User など)しか分からない時は、
+// 拡張機能や PC Status の名前が届くまで、持ち主への DM を少し待つ
+const NAME_WAIT_MS = parseInt(process.env.COMPANION_NAME_WAIT_MS || String(10 * 60 * 1000), 10);
 
 const companions = Object.create(null); // id -> { key, label, lang, discordId, sig, lastSeen, seq, queue, waiters, created }
 const lastGame = new Map(); // `${discordId}|${game}` -> 時刻
@@ -342,9 +346,55 @@ async function publicMember(discordId) {
   return m ? { id: m.id, name: m.name, avatar: m.avatar } : discordId ? { id: discordId, name: discordId, avatar: avatarUrl(discordId) } : null;
 }
 
+const clean = (v) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40) : '');
+// DM の中で太字などに化けないように、Discord の記号の前に \ を付ける
+const md = (v) => String(v).replace(/([\\*_`~|>#@\[\]()-])/g, '\\$1');
+const idOf = (v) => (typeof v === 'string' && /^[A-Za-z0-9_.:-]{4,80}$/.test(v) ? v : null);
+
+// 見せる名前: 拡張機能の名前 → PC Status の名前 → (古いアプリが送ってきた名前) → Windows のユーザー名
+function displayName(c) {
+  const n = c.names || {};
+  return n.ext || n.pc || n.legacy || n.win || '?';
+}
+function hasGoodName(c) {
+  const n = c.names || {};
+  return !!(n.ext || n.pc);
+}
+// 「toro>< (PC Status: toro / Windows: PC_User)」のように、ほかの名前も添える
+function nameDetail(c) {
+  const n = c.names || {};
+  const main = displayName(c);
+  const extra = [];
+  if (n.pc && n.pc !== main) extra.push('PC Status: ' + n.pc);
+  if (n.win && n.win !== main) extra.push('Windows: ' + n.win);
+  return `**${md(main)}**` + (extra.length ? `(${extra.map(md).join(' / ')})` : '');
+}
+function peersOfCompanion(c) {
+  try {
+    return rooms.peersOf(c.client, c.pc).filter((x) => x && x !== displayName(c));
+  } catch (e) {
+    return [];
+  }
+}
+
+function sendNewInstallDm(c) {
+  if (c.dmSent) return;
+  c.dmSent = true;
+  clearTimeout(c.dmTimer);
+  c.dmTimer = null;
+  const peers = peersOfCompanion(c);
+  const lines = [`🔔 ${nameDetail(c)} さんが Listen Together アプリを入れました。`];
+  if (peers.length) lines.push(`前に一緒に聴いたことのある人: ${peers.map(md).join('、')}`);
+  else if (!hasGoodName(c)) lines.push('拡張機能の名前が分からなかったため、Windows のユーザー名を表示しています。');
+  lines.push('だれなのかを選ぶまで、通知は届きません。https://pc-status-relay.onrender.com/admin で選んでください。');
+  dmOwner(lines.join('\n'));
+}
+
 async function hello(data) {
-  const label = String(data.label || '').slice(0, 40) || '?';
   const lang = data.lang === 'ja' ? 'ja' : 'en';
+  // 新しいアプリ(1.3.1〜)は名前を種類ごとに送ってくる。古いアプリは label だけ
+  const names = { ext: clean(data.extLabel), pc: clean(data.pcLabel), win: clean(data.winUser) };
+  if (!names.ext && !names.pc && !names.win) names.legacy = clean(data.label);
   let id = typeof data.id === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(data.id) ? data.id : null;
   let key = typeof data.key === 'string' && data.key.length >= 16 && data.key.length <= 128 ? data.key : null;
   let c = id ? companions[id] : null;
@@ -356,9 +406,16 @@ async function hello(data) {
       id = crypto.randomBytes(12).toString('base64url');
       key = crypto.randomBytes(24).toString('base64url');
     }
-    c = companions[id] = { key, label, lang, discordId: null, sig: null, lastSeen: Date.now(), seq: 0, queue: [], waiters: [], created: Date.now() };
+    // 新しい人でなければ(このサーバーが再起動して忘れていただけなら)、DM はもう送ってある
+    c = companions[id] = { key, names: {}, lang, discordId: null, sig: null, lastSeen: Date.now(), seq: 0, queue: [], waiters: [], created: Date.now(), dmSent: !isNew };
   }
-  c.label = label;
+  // 届いた名前で上書きする(空のものは前の名前を残す)
+  c.names = c.names || {};
+  for (const k of ['ext', 'pc', 'win', 'legacy']) if (names[k]) c.names[k] = names[k];
+  if (names.ext || names.pc || names.win) delete c.names.legacy;
+  c.label = displayName(c);
+  if (idOf(data.client)) c.client = data.client;
+  if (idOf(data.pc)) c.pc = data.pc;
   c.lang = lang;
   c.lastSeen = Date.now();
   // 前に選ばれた人(署名付き)なら、そのまま元に戻す
@@ -366,8 +423,12 @@ async function hello(data) {
     c.discordId = data.discordId;
     c.sig = data.sig;
   }
-  if (isNew) {
-    dmOwner(`🔔 **${label}** さんが Listen Together アプリを入れました。\nだれなのかを選ぶまで、通知は届きません。https://pc-status-relay.onrender.com/admin で選んでください。`);
+  if (!c.dmSent) {
+    if (hasGoodName(c) || c.discordId) sendNewInstallDm(c);
+    else if (!c.dmTimer) {
+      c.dmTimer = setTimeout(() => sendNewInstallDm(c), NAME_WAIT_MS);
+      if (c.dmTimer.unref) c.dmTimer.unref();
+    }
   }
   return { id, key, approved: !!c.discordId, discordId: c.discordId, sig: c.sig, me: await publicMember(c.discordId), seq: c.seq };
 }
@@ -396,7 +457,18 @@ async function adminList() {
   const list = [];
   for (const id of Object.keys(companions)) {
     const c = companions[id];
-    list.push({ id, label: c.label, lang: c.lang, lastSeen: c.lastSeen, created: c.created, online: Date.now() - c.lastSeen < 90000, member: await publicMember(c.discordId) });
+    const n = c.names || {};
+    list.push({
+      id,
+      label: displayName(c),
+      names: { ext: n.ext || null, pc: n.pc || null, win: n.win || null },
+      peers: peersOfCompanion(c),
+      lang: c.lang,
+      lastSeen: c.lastSeen,
+      created: c.created,
+      online: Date.now() - c.lastSeen < 90000,
+      member: await publicMember(c.discordId),
+    });
   }
   list.sort((a, b) => (a.member ? 1 : 0) - (b.member ? 1 : 0) || b.created - a.created);
   return { discord: { status: discord.status, guild: discord.guild.name }, members: members.map(({ id, name, username, avatar }) => ({ id, name, username, avatar })), companions: list };
@@ -409,6 +481,74 @@ async function assign(companionId, discordId) {
   c.sig = discordId ? sign(companionId, discordId) : null;
   push(c, { type: 'assigned', discordId: c.discordId, sig: c.sig, me: await publicMember(c.discordId) });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- 再起動しても忘れないための控え(backup.js)
+function snapshot() {
+  return Object.entries(companions).map(([id, c]) => ({
+    id,
+    key: c.key,
+    names: c.names || {},
+    client: c.client || null,
+    pc: c.pc || null,
+    lang: c.lang,
+    discordId: c.discordId || null,
+    sig: c.sig || null,
+    created: c.created,
+    lastSeen: c.lastSeen,
+    dmSent: !!c.dmSent,
+  }));
+}
+
+function restore(list) {
+  if (!Array.isArray(list)) return 0;
+  let n = 0;
+  for (const x of list) {
+    if (!x || typeof x.id !== 'string' || typeof x.key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(x.id)) continue;
+    const cur = companions[x.id];
+    if (cur) {
+      // 再起動のあとにもう繋がってきた人は、今の方を優先して、足りない所だけ埋める
+      if (!safeEqual(cur.key, x.key)) continue;
+      cur.names = Object.assign({}, x.names || {}, cur.names || {});
+      cur.label = displayName(cur);
+      cur.client = cur.client || x.client || undefined;
+      cur.pc = cur.pc || x.pc || undefined;
+      if (!cur.discordId && x.discordId && x.sig && safeEqual(sign(x.id, x.discordId), x.sig)) {
+        cur.discordId = x.discordId;
+        cur.sig = x.sig;
+      }
+      if (x.created && x.created < cur.created) cur.created = x.created;
+      if (x.dmSent) {
+        cur.dmSent = true;
+        clearTimeout(cur.dmTimer);
+        cur.dmTimer = null;
+      }
+      n++;
+      continue;
+    }
+    if (Object.keys(companions).length >= MAX_COMPANIONS) break;
+    const ok = x.discordId && x.sig && safeEqual(sign(x.id, x.discordId), x.sig);
+    const names = {};
+    for (const k of ['ext', 'pc', 'win', 'legacy']) if (x.names && clean(x.names[k])) names[k] = clean(x.names[k]);
+    const c = (companions[x.id] = {
+      key: x.key,
+      names,
+      client: idOf(x.client) || undefined,
+      pc: idOf(x.pc) || undefined,
+      lang: x.lang === 'ja' ? 'ja' : 'en',
+      discordId: ok ? x.discordId : null,
+      sig: ok ? x.sig : null,
+      lastSeen: Number(x.lastSeen) || 0,
+      created: Number(x.created) || Date.now(),
+      seq: 0,
+      queue: [],
+      waiters: [],
+      dmSent: true,
+    });
+    c.label = displayName(c);
+    n++;
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -491,4 +631,4 @@ function stop() {
   if (ws) ws.close();
 }
 
-module.exports = { handle, start, stop, _test: { discord, companions, sign, onVoiceState, onGuildCreate, canView } };
+module.exports = { handle, start, stop, snapshot, restore, _test: { discord, companions, sign, onVoiceState, onGuildCreate, canView } };

@@ -684,6 +684,7 @@ async function refreshAgent() {
       if (!resp.ok) throw new Error('agent ' + resp.status);
       agent.data = await resp.json();
       agent.okAt = Date.now();
+      sendProfileToApp(false);
       agent.failSince = 0;
       maybeReload(agent.data.extVersion);
     } catch (e) {
@@ -1223,6 +1224,29 @@ async function popupState() {
 const OVERLAY_URL = 'http://127.0.0.1:8789';
 let overlayDownUntil = 0;
 
+// アプリ(Listen Together)に伝える、この人の名前など。
+// extLabel: この拡張機能で決めた名前 / pcLabel: PC Status の名前 / client・pc: 番号
+// (skeliy の割り当てのページで「前に一緒に聴いたことのある人」を出すのに使う)。label は古いアプリ用
+let profileSent = { key: '', at: 0 };
+function sendProfileToApp(force) {
+  const extLabel = (client && client.label) || '';
+  const pcLabel = (agent.data && agent.data.label) || '';
+  const body = {
+    label: extLabel || pcLabel,
+    extLabel,
+    pcLabel,
+    client: (client && client.client) || '',
+    pc: (agent.data && agent.data.pc) || '',
+    lang,
+  };
+  const key = JSON.stringify(body);
+  // 変わった時と、10分おきにだけ送る(アプリが無い PC では、送れないだけで何も起きない)
+  if (!force && key === profileSent.key && Date.now() - profileSent.at < 10 * 60 * 1000) return;
+  if (!force && !extLabel && !pcLabel) return;
+  profileSent = { key, at: Date.now() };
+  overlayPost('/profile', body);
+}
+
 async function overlayPost(path, body, force) {
   if (!force && Date.now() < overlayDownUntil) return null;
   try {
@@ -1251,8 +1275,7 @@ async function lyricsSwitchState() {
     await chrome.storage.local.set({ overlaySeen: true });
     await chrome.storage.local.remove('lyricsInstallAt');
     // アプリに、この人の名前と画面の言語を伝える(通知の言葉と、skeliy が割り当てる時の名前に使う)
-    const label = (client && client.label) || (agent.data && agent.data.label) || '';
-    overlayPost('/profile', { label, lang });
+    sendProfileToApp(true);
     const notify = state.features && state.features.includes('notify') ? state.notify || null : null;
     const seen = await chrome.storage.local.get('notifyGuideSeen');
     return { supported: true, installed: true, running: true, enabled: !!state.enabled, notify, notifyOld: !notify, notifyGuideSeen: !!seen.notifyGuideSeen };

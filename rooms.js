@@ -38,6 +38,11 @@ const CLIENT_FORGET_MS = 3 * 24 * 60 * 60 * 1000;
 const CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 
 const rooms = Object.create(null);
+// 前に部屋に入った人の記録(部屋が片付けられた後や、このサーバーが再起動した直後の分)。
+// 部屋がまた開いたら、その部屋の known に戻す。中身は持ち主の PC にも控えておく(backup.js)
+const savedKnown = Object.create(null); // 部屋 id -> [known の中身]
+const savedOwner = Object.create(null); // 部屋 id -> 最後のホストの名前
+const savedOwnerPc = Object.create(null); // 部屋 id -> その部屋の持ち主の PC の番号
 const joinFailures = new Map(); // ip -> [timestamps]
 const clients = Object.create(null); // 拡張機能ごとの受信箱 clientId -> { key, label, service, lastSeen, seq, queue, waiters }
 
@@ -235,8 +240,8 @@ function hostOf(room) {
 function newRoom(id) {
   return {
     id,
-    ownerPc: null,
-    ownerLabel: null, // 今(閉じていれば最後)のホストの名前
+    ownerPc: savedOwnerPc[id] || null,
+    ownerLabel: savedOwner[id] || null, // 今(閉じていれば最後)のホストの名前
     hostToken: null,
     passKey: null,
     passKeyFrom: null, // 'agent'(持ち主のエージェントが決めた) / 'pass'(通行証から取り戻した)
@@ -244,11 +249,20 @@ function newRoom(id) {
     queue: [],
     seq: 0,
     waiters: [],
-    known: new Map(),
+    known: restoreKnown(id),
     invites: new Map(),
     lastState: null,
     closedAt: Date.now(),
   };
+}
+
+function restoreKnown(id) {
+  const map = new Map();
+  for (const k of savedKnown[id] || []) if (k && k.key) map.set(k.key, k);
+  delete savedKnown[id];
+  delete savedOwner[id];
+  delete savedOwnerPc[id];
+  return map;
 }
 
 function setHost(room, member) {
@@ -459,6 +473,9 @@ function sweep() {
     }
     // パスワードのある部屋は、閉じても覚えておく(パスワードを知っている人が、あとでホストとして開けるように)
     if (!isOpen(room) && !room.passKey && room.waiters.length === 0 && now - room.closedAt > OWNER_TIMEOUT_MS * 4) {
+      if (room.known.size) savedKnown[id] = Array.from(room.known.values()); // 前に入った人の記録は残しておく
+      if (room.ownerLabel) savedOwner[id] = room.ownerLabel;
+      if (room.ownerPc) savedOwnerPc[id] = room.ownerPc;
       delete rooms[id];
     }
   }
@@ -1115,4 +1132,69 @@ function handleClient(req, res, parsedUrl, ctx) {
   sendJson(res, 404, { error: 'not found' });
 }
 
-module.exports = { handle, buildZip, crc32, setAgentHooks };
+// ---- 再起動しても消えないように、持ち主の PC に控えてもらう分(backup.js が使う) ----
+function snapshot() {
+  const known = {};
+  for (const [id, list] of Object.entries(savedKnown)) known[id] = list.slice(0, 200);
+  for (const [id, room] of Object.entries(rooms)) {
+    if (room.known.size) known[id] = Array.from(room.known.values()).slice(0, 200);
+  }
+  const owners = Object.assign({}, savedOwner);
+  for (const [id, room] of Object.entries(rooms)) if (room.ownerLabel) owners[id] = room.ownerLabel;
+  const ownerPcs = Object.assign({}, savedOwnerPc);
+  for (const [id, room] of Object.entries(rooms)) if (room.ownerPc) ownerPcs[id] = room.ownerPc;
+  const clientLabels = {};
+  for (const [id, c] of Object.entries(clients)) if (c.label) clientLabels[id] = { label: c.label, service: c.service };
+  return { known, owners, ownerPcs, clientLabels };
+}
+
+function restore(data) {
+  if (!data || typeof data !== 'object') return;
+  for (const [id, list] of Object.entries(data.known || {})) {
+    if (!Array.isArray(list)) continue;
+    const room = rooms[id];
+    for (const k of list) {
+      if (!k || typeof k.key !== 'string') continue;
+      if (room) {
+        if (!room.known.has(k.key)) room.known.set(k.key, k); // 今の記録の方を優先する
+      } else {
+        savedKnown[id] = savedKnown[id] || [];
+        if (!savedKnown[id].some((x) => x.key === k.key)) savedKnown[id].push(k);
+      }
+    }
+  }
+  for (const [id, label] of Object.entries(data.owners || {})) {
+    if (typeof label !== 'string') continue;
+    if (rooms[id]) { if (!rooms[id].ownerLabel) rooms[id].ownerLabel = label; } else if (!savedOwner[id]) savedOwner[id] = label;
+  }
+  for (const [id, pc] of Object.entries(data.ownerPcs || {})) {
+    if (typeof pc !== 'string') continue;
+    if (rooms[id]) { if (!rooms[id].ownerPc) rooms[id].ownerPc = pc; } else if (!savedOwnerPc[id]) savedOwnerPc[id] = pc;
+  }
+  for (const [id, info] of Object.entries(data.clientLabels || {})) if (info && typeof info.label === 'string') restoredLabels[id] = info;
+}
+const restoredLabels = Object.create(null); // 再起動前の拡張機能の名前(拡張機能がまた繋がるまでの間に使う)
+
+// その拡張機能(またはPC)の人と、一緒に聴いたことのある人の名前
+function peersOf(clientId, pcId) {
+  const keys = new Set([clientId ? 'c:' + clientId : null, pcId ? 'a:' + pcId : null].filter(Boolean));
+  if (!keys.size) return [];
+  const names = new Set();
+  // その人が部屋に入ったことがある(known にいる)か、その人の PC の部屋なら、そこにいた人を全部
+  const consider = (roomId, list, owner, ownerPc) => {
+    const mine = !!(pcId && ownerPc && ownerPc === pcId);
+    if (!mine && !list.some((k) => keys.has(k.key))) return;
+    if (owner && !mine) names.add(owner);
+    for (const k of list) if (!keys.has(k.key) && k.label) names.add(k.label);
+  };
+  for (const [id, room] of Object.entries(rooms)) consider(id, Array.from(room.known.values()), room.ownerLabel, room.ownerPc);
+  for (const [id, list] of Object.entries(savedKnown)) consider(id, list, savedOwner[id], savedOwnerPc[id]);
+  return Array.from(names).slice(0, 12);
+}
+
+function clientLabel(clientId) {
+  const c = clientId && clients[clientId];
+  return (c && c.label) || (clientId && restoredLabels[clientId] && restoredLabels[clientId].label) || '';
+}
+
+module.exports = { handle, buildZip, crc32, setAgentHooks, snapshot, restore, peersOf, clientLabel };

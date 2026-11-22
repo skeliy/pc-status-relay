@@ -562,7 +562,15 @@ class MusicSync:
                 room = {"id": self.room_id, "token": self.own_token, "role": "owner", "owner": self.own_owner or self.pc_label}
             else:
                 room = None
-            return {"room": room, "ui": self._ui_locked(), "extVersion": self.extension_version(), "agentCard": self.agent_card}
+            # label / pc: この PC の名前と番号(拡張機能が Listen Together アプリに伝える)
+            return {
+                "room": room,
+                "ui": self._ui_locked(),
+                "extVersion": self.extension_version(),
+                "agentCard": self.agent_card,
+                "label": self.pc_label,
+                "pc": self.pc_id,
+            }
 
     def handle_ext_action(self, action, sid=None):
         if action == "request":

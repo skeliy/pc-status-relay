@@ -412,7 +412,12 @@ function startServer() {
       }
       if (req.url === '/profile') {
         // 拡張機能から: その人の名前と、通知に使う言語
-        if (notifier) notifier.setProfile({ label: typeof body.label === 'string' ? body.label : '', lang: body.lang });
+        if (notifier) {
+          const str = (v) => (typeof v === 'string' ? v : '');
+          const p = { label: str(body.label), pcLabel: str(body.pcLabel), client: str(body.client), pc: str(body.pc), lang: body.lang };
+          if (typeof body.extLabel === 'string') p.extLabel = body.extLabel;
+          notifier.setProfile(p);
+        }
         return reply(200, { ok: true });
       }
       if (req.url === '/notify-test') {

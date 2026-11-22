@@ -344,7 +344,11 @@ def main_loop(config):
 
     for attempt in range(20):  # 再起動直後は古いプロセスがまだポートを使っていることがあるので少し粘る
         try:
-            start_local_ui_server(override, config["local_ui_port"])
+            start_local_ui_server(
+                override,
+                config["local_ui_port"],
+                whoami={"label": config.get("pc_label") or config.get("pc_id"), "pc": config.get("pc_id")},
+            )
             print(
                 f"[カスタムステータス設定] http://127.0.0.1:{config['local_ui_port']}/ "
                 "をこのPCのブラウザで開くと設定できます"
@@ -368,6 +372,15 @@ def main_loop(config):
         start_week_reporter(config, weeklog, SCRIPT_DIR)
     except Exception as e:
         print(f"[週の記録] 始められませんでした: {e}")
+
+    # 中継サーバーの記録の控えを預かる(relay_backup.json がある PC = 持ち主の PC だけ)
+    try:
+        from relay_backup import start_relay_backup
+
+        if start_relay_backup(config, SCRIPT_DIR):
+            print("[中継サーバーの控え] 1分ごとに預かります")
+    except Exception as e:
+        print(f"[中継サーバーの控え] 始められませんでした: {e}")
 
     if config.get("show_tray_icon", False):
         try:
