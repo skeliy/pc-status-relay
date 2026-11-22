@@ -12,7 +12,9 @@ while ($true) {
   if ($ok) { $s = 0; if ([LT.Q]::SHQueryUserNotificationState([ref]$s) -eq 0) { $q = $s } }
   $p = @()
   if ($n % 3 -eq 0) {
-    $p = @(Get-Process | Where-Object { $_.Path -and $_.Path -notlike 'C:\Windows\*' } | ForEach-Object { ,@($_.Id, ($_.ProcessName + '.exe'), $_.Path) })
+    # 場所(Path)が読めないプログラムも入れる。VALORANT などチート対策に守られたゲームは、場所を教えてくれないため
+    # (場所が分からないものは、名前だけでゲームか決める。games.js が普通のアプリを間違えないようにしている)
+    $p = @(Get-Process | ForEach-Object { $path = [string]$_.Path; if ($path -like 'C:\Windows\*') { return }; ,@($_.Id, ($_.ProcessName + '.exe'), $path) })
   }
   $line = @{ q = $q; p = $p; full = ($n % 3 -eq 0) } | ConvertTo-Json -Compress -Depth 4
   [Console]::Out.WriteLine($line)

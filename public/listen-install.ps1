@@ -25,12 +25,14 @@ Write-Host 'Listen Together: downloading the extension... / 拡張機能をダ�
 # 前の入れ方の残り
 $ltDl = Join-Path $env:LOCALAPPDATA 'ListenTogether-setup'
 if (Test-Path $ltDl) { Remove-Item $ltDl -Recurse -Force }
-# 更新係をファイルとして保存して、そのファイルを実行する(拡張機能のダウンロードもこれがする)
+# 更新係をファイルとして保存して、その中身を実行する(拡張機能のダウンロードもこれがする)。
+# Windows は最初の設定でスクリプトのファイルを直接実行できない(「running scripts is disabled」)ので、
+# ここでは中身を読んで実行する。タスクやアプリからは「-ExecutionPolicy Bypass -File」で実行するので、それで動く
 $ltUpdDir = Join-Path $env:LOCALAPPDATA 'ListenTogether-updater'
 New-Item -ItemType Directory -Force -Path $ltUpdDir | Out-Null
 $ltScript = Join-Path $ltUpdDir 'update.ps1'
 Invoke-WebRequest -UseBasicParsing -Uri $ltUpdateUrl -OutFile $ltScript
-& $ltScript
+Invoke-Expression (Get-Content -Raw -Encoding UTF8 -Path $ltScript)
 
 $ltAuto = $false
 if (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) {

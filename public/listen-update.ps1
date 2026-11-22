@@ -156,7 +156,8 @@ function Install-ListenTogetherApp {
     New-Item -ItemType Directory -Force -Path $updDir | Out-Null
     $file = Join-Path $updDir 'lyrics-install.ps1'
     Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $file
-    & $file
+    # スクリプトのファイルを直接実行できない設定でも動くよう、中身を読んで実行する
+    Invoke-Expression (Get-Content -Raw -Encoding UTF8 -Path $file)
 }
 
 if ($args -contains 'install-app') {
