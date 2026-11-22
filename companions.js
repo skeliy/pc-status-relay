@@ -446,13 +446,36 @@ async function reportGame(c, game) {
   return { ok: true };
 }
 
-async function adminList() {
-  if (BOT_TOKEN && discord.members.size < 2) {
+// サーバーのメンバー全員(割り当てのページの選択肢)。人数の多いサーバーでは、ボットの起動時に
+// Discord から届くのは一部の人だけなので、ページを開いた時に一覧を取り直す(1分に1回まで)
+let membersFetchedAt = 0;
+let membersFetching = null;
+async function refreshMembers() {
+  if (!BOT_TOKEN || Date.now() - membersFetchedAt < 60 * 1000) return;
+  if (membersFetching) return membersFetching;
+  membersFetching = (async () => {
     try {
-      const list = await rest('GET', `/guilds/${GUILD_ID}/members?limit=1000`);
-      for (const m of list) rememberMember(m);
-    } catch (e) {}
-  }
+      let after = '0';
+      for (let page = 0; page < 20; page++) {
+        const list = await rest('GET', `/guilds/${GUILD_ID}/members?limit=1000&after=${after}`);
+        if (!Array.isArray(list) || !list.length) break;
+        for (const m of list) rememberMember(m);
+        const last = list[list.length - 1];
+        if (list.length < 1000 || !last || !last.user) break;
+        after = last.user.id;
+      }
+      membersFetchedAt = Date.now();
+    } catch (e) {
+      console.warn('[discord] member list failed:', e.message);
+    } finally {
+      membersFetching = null;
+    }
+  })();
+  return membersFetching;
+}
+
+async function adminList() {
+  await refreshMembers();
   const members = [...discord.members.values()].filter((m) => !m.bot).sort((a, b) => a.name.localeCompare(b.name, 'ja'));
   const list = [];
   for (const id of Object.keys(companions)) {
