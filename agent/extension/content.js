@@ -180,7 +180,7 @@
       .x:hover { background: #fa2d48; color: #fff; filter: none; }
       .x svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
       @keyframes pcs-fade { to { opacity: 0; transform: translateY(6px); } }
-      /* 右下のヘッドフォンは、30秒カーソルが乗らないと見えなくなる(場所に合わせればまた出る) */
+      /* 右下のヘッドフォンは、10秒カーソルが乗らないと見えなくなる(場所に合わせればまた出る) */
       .dock.idle:not(.hover):not(.open) .fab { opacity: 0; transition: opacity 1.2s ease; }
       .card { background: rgba(32,34,44,.95); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 12px;
               box-shadow: 0 6px 24px rgba(0,0,0,.35); width: 230px; }
@@ -342,8 +342,8 @@
   }
   // カーソルが乗ったらすぐ開き、離れても少しの間は開いたままにする(ボタンの間を動く時に閉じないように)
   let hoverTimer = null;
-  // 30秒カーソルが乗らないと、ヘッドフォンを見えなくする(場所にカーソルを合わせると、すぐにまた出る)
-  const IDLE_MS = 30000;
+  // 10秒カーソルが乗らないと、ヘッドフォンを見えなくする(場所にカーソルを合わせると、すぐにまた出る)
+  const IDLE_MS = 10000;
   let idleTimer = null;
   const armIdle = () => {
     clearTimeout(idleTimer);
