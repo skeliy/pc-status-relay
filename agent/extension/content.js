@@ -172,6 +172,16 @@
                   transition: opacity .12s, transform .12s; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
       .icon-btn[data-tip]:hover::after, .icon-btn[data-tip]:focus-visible::after, .icon-btn.show-tip::after { opacity: 1; transform: translate(0, -50%); }
       @media (prefers-reduced-motion: reduce) { .icon-btn, .icon-btn::after { transition: none; } .opt.busy svg { animation: none; } }
+      /* お知らせ: 右上の ✕ で閉じる。時間がたつと(カーソルが乗っていなければ)ふわっと消える */
+      .note { position: relative; }
+      .pill.note { padding-right: 14px; }
+      .x { position: absolute; top: -8px; right: -8px; width: 22px; height: 22px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+           background: rgba(48,50,62,.98); border: 1px solid rgba(255,255,255,.18); color: rgba(255,255,255,.8); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+      .x:hover { background: #fa2d48; color: #fff; filter: none; }
+      .x svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+      @keyframes pcs-fade { to { opacity: 0; transform: translateY(6px); } }
+      /* 右下のヘッドフォンは、30秒カーソルが乗らないと見えなくなる(場所に合わせればまた出る) */
+      .dock.idle:not(.hover):not(.open) .fab { opacity: 0; transition: opacity 1.2s ease; }
       .card { background: rgba(32,34,44,.95); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 12px;
               box-shadow: 0 6px 24px rgba(0,0,0,.35); width: 230px; }
       .head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -202,6 +212,73 @@
   const text = (t, cls) => el('div', cls ? { class: cls, text: t } : { text: t });
   const pill = (lines, buttons) => el('div', { class: 'pill' }, [el('div', { class: 'text' }, lines), ...(buttons || [])]);
   const button = (label, onclick, primary) => el('button', primary ? { class: 'primary', text: label, onclick } : { text: label, onclick });
+
+  // ---- お知らせの出し方: ✕ で閉じられる。auto のものは 15秒たつと消える(カーソルが乗っている間は消えない)
+  const NOTE_MS = 15000;
+  const noteSeen = new Map(); // お知らせの中身 -> 出し始めた時刻
+  const noteClosed = new Set(); // ✕ で閉じたお知らせ(同じ中身のままの間は、もう出さない)
+  let noteKeys = new Set();
+  let noteNext = Infinity;
+  let noteTimer = null;
+  let noteLabel = 'Close';
+  // カーソルの場所(描き直した直後は、ブラウザの「乗っている」がまだ付いていないことがあるので、場所でも確かめる)
+  let ptr = null;
+  window.addEventListener('mousemove', (e) => (ptr = { x: e.clientX, y: e.clientY }), { capture: true, passive: true });
+  document.addEventListener('mouseleave', () => (ptr = null));
+  const pointerOn = (n) => {
+    if (n.matches(':hover')) return true;
+    if (!ptr) return false;
+    const hit = root.elementFromPoint(ptr.x, ptr.y);
+    return !!hit && n.contains(hit);
+  };
+  function rerender() {
+    lastKey = null;
+    render(lastUi);
+  }
+  function xIcon() {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', 'M6 6l12 12M18 6L6 18');
+    svg.appendChild(path);
+    return svg;
+  }
+  function show(key, node, auto) {
+    noteKeys.add(key);
+    if (noteClosed.has(key)) return;
+    if (!noteSeen.has(key)) noteSeen.set(key, Date.now());
+    const left = NOTE_MS - (Date.now() - noteSeen.get(key));
+    if (auto && left <= 0) return;
+    node.classList.add('note');
+    node.dataset.key = key;
+    const x = el('button', { class: 'x', 'aria-label': noteLabel, title: noteLabel }, [xIcon()]);
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      noteClosed.add(key);
+      rerender();
+    });
+    node.appendChild(x);
+    if (auto) {
+      node.style.animation = `pcs-fade .5s ease ${Math.max(0, left - 500)}ms forwards`;
+      noteNext = Math.min(noteNext, left);
+      node.addEventListener('mouseenter', () => {
+        node.style.animation = 'none'; // 乗っている間は消さない(描き直す時にも、乗っていれば時間を数え直す)
+      });
+      node.addEventListener('mouseleave', () => {
+        noteSeen.set(key, Date.now()); // 離したら、そこからまた 15秒
+        rerender();
+      });
+    }
+    wrap.appendChild(node);
+  }
+  function notesDone() {
+    // もう出ていないお知らせは忘れる(また同じ状態になったら、もう一度出す)
+    for (const k of [...noteSeen.keys()]) if (!noteKeys.has(k)) noteSeen.delete(k);
+    for (const k of [...noteClosed]) if (!noteKeys.has(k)) noteClosed.delete(k);
+    clearTimeout(noteTimer);
+    if (noteNext !== Infinity) noteTimer = setTimeout(rerender, noteNext + 50);
+  }
   // 人のアイコン
   function personIcon() {
     const NS = 'http://www.w3.org/2000/svg';
@@ -259,18 +336,29 @@
       fab = iconButton('fab', 'headphones', '', () => dock.classList.toggle('open'));
       fab.removeAttribute('data-tip');
       dock.appendChild(fab);
+      armIdle();
     }
     fab.setAttribute('aria-label', T('dockTitle'));
   }
   // カーソルが乗ったらすぐ開き、離れても少しの間は開いたままにする(ボタンの間を動く時に閉じないように)
   let hoverTimer = null;
+  // 30秒カーソルが乗らないと、ヘッドフォンを見えなくする(場所にカーソルを合わせると、すぐにまた出る)
+  const IDLE_MS = 30000;
+  let idleTimer = null;
+  const armIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => dock.classList.add('idle'), IDLE_MS);
+  };
   dock.addEventListener('pointerenter', () => {
     clearTimeout(hoverTimer);
+    clearTimeout(idleTimer);
+    dock.classList.remove('idle');
     dock.classList.add('hover');
   });
   dock.addEventListener('pointerleave', () => {
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => dock.classList.remove('hover'), 280);
+    armIdle();
   });
   function setOptButton(b, o) {
     const icon = o.id === 'invite' ? 'invite' : o.state === 'busy' ? 'spinner' : o.state === 'done' ? 'check' : o.state === 'fail' ? 'alert' : 'reverse';
@@ -323,8 +411,23 @@
     const key = JSON.stringify([ui, showReverse, reverse.busy, revText]);
     if (key === lastKey) return;
     lastKey = key;
+    // カーソルが乗っているお知らせは、そこから時間を数え直す(乗っている間は消えない)
+    for (const n of wrap.querySelectorAll('.note')) {
+      if (noteSeen.has(n.dataset.key) && pointerOn(n)) noteSeen.set(n.dataset.key, Date.now());
+    }
     wrap.textContent = '';
+    noteKeys = new Set();
+    noteNext = Infinity;
+    try {
+      renderNotes(ui, showReverse, revText);
+    } finally {
+      notesDone();
+    }
+  }
+
+  function renderNotes(ui, showReverse, revText) {
     const T = (k, ...a) => PcsI18n.t(ui ? ui.lang : 'en', k, ...a); // 画面の言語(アイコンの画面で切り替える)
+    noteLabel = T('close');
     // 右下のボタン: 招待(PC Status の人)と、新しい曲から再生(Apple Music を選んだ人が、プレイリストを開いている時)
     const opts = [];
     if (showReverse) {
@@ -337,44 +440,52 @@
     const person = (label, service) => (ui.lang === 'ja' ? `${label}(${SERVICE_NAMES[service] || '?'})` : `${label} (${SERVICE_NAMES[service] || '?'})`);
 
     if (ui.versionMismatch) {
-      wrap.appendChild(pill([text(T('extOutdated'), 'muted')]));
+      show('ver', pill([text(T('extOutdated'), 'muted')]), true);
     }
     if (ui.loginNeeded) {
-      wrap.appendChild(pill([text(T('spotifyLogin'), 'muted')]));
+      show('login', pill([text(T('spotifyLogin'), 'muted')]), true);
     }
     if (ui.notice) {
-      wrap.appendChild(pill([text(PcsI18n.fmt(ui.lang, ui.notice), 'muted')]));
+      show('notice:' + JSON.stringify(ui.notice), pill([text(PcsI18n.fmt(ui.lang, ui.notice), 'muted')]), true);
     }
     for (const req of ui.incoming || []) {
-      wrap.appendChild(
+      show(
+        'req:' + req.sessionId,
         pill([text(T('requestFrom', req.label))], [
           button(T('allow'), () => sendAction('accept', { sessionId: req.sessionId }), true),
           button(T('deny'), () => sendAction('decline', { sessionId: req.sessionId })),
-        ])
+        ]),
+        false
       );
     }
     // 届いた曲が、自分のサービスで見つからなかった → 自分で探して流してもらう(その曲を代わりにする)
     if (ui.findSong) {
-      wrap.appendChild(
+      show(
+        'find:' + ui.findSong.title,
         pill([text(T('notFoundTitle', ui.findSong.title)), text(T('notFoundHint'), 'muted')], [
           button(T('search'), () => sendAction('find-song'), true),
-        ])
+        ]),
+        false
       );
     }
     if (ui.needsClick) {
-      wrap.appendChild(
+      show(
+        'click',
         pill([text(T('autoplayBlocked')), text(T('autoplayHint'), 'muted')], [
           button(T('play'), () => window.postMessage({ source: SRC_CMD, cmd: { id: -1, action: 'play' } }, '*'), true),
-        ])
+        ]),
+        false
       );
     }
 
     for (const inv of ui.invites || []) {
-      wrap.appendChild(
+      show(
+        'inv:' + inv.code,
         pill([text(T('inviteFrom', inv.fromLabel)), text(T('roomOf', inv.owner), 'muted')], [
           button(T('join'), () => sendAction('accept-invite', { code: inv.code }), true),
           button(T('decline'), () => sendAction('decline-invite', { code: inv.code })),
-        ])
+        ]),
+        false
       );
     }
 
@@ -382,11 +493,12 @@
     const members = room ? room.members || [] : [];
     const others = room ? members.filter((m) => m.id !== room.you) : [];
     if (room && !ui.connected) {
-      wrap.appendChild(pill([text(T('connecting'), 'muted')]));
+      show('connecting', pill([text(T('connecting'), 'muted')]), true);
     } else if (room && others.length > 0) {
       // 誰が参加しているかを、自分も含めて1人ずつ(人のアイコンと名前)並べる
       const leaveLabel = room.role === 'owner' || room.role === 'self' ? T('end') : T('leave');
-      wrap.appendChild(
+      show(
+        'members:' + JSON.stringify([room.role, members.map((m) => [m.id, m.label, m.service, m.host || m.id === room.host])]),
         el('div', { class: 'card' }, [
           el('div', { class: 'head', title: room.role === 'owner' ? T('ownerHint') : T('guestHint') }, [
             el('span', { class: 'title', text: '🎧 ' + T('listeningHeader', members.length) }),
@@ -400,34 +512,37 @@
               el('span', { class: 'psvc', text: SERVICE_NAMES[m.service] || '' }),
             ])
           ),
-        ])
+        ]),
+        true
       );
     } else if (ui.pending) {
-      wrap.appendChild(
-        pill([text(T('requesting')), text(T('waitingApproval'), 'muted')], [button(T('cancel'), () => sendAction('cancel'))])
-      );
+      show('pending', pill([text(T('requesting')), text(T('waitingApproval'), 'muted')], [button(T('cancel'), () => sendAction('cancel'))]), false);
     } else if (ui.mode === 'guest' && room && room.role === 'self') {
       // 1人で流している(自分の部屋)。一緒に聴いたことのある人が入ってこられる
-      wrap.appendChild(pill([text(T('selfRoom')), text(T('selfRoomHint'), 'muted')]));
+      show('self', pill([text(T('selfRoom')), text(T('selfRoomHint'), 'muted')]), true);
     } else if (ui.mode === 'guest') {
       const hosting = !!(room && room.you && room.host === room.you);
-      wrap.appendChild(
+      show(
+        'guest:' + JSON.stringify([hosting, room && room.owner]),
         pill(hosting ? [text(T('hosting')), text(T('hostingHint'), 'muted')] : [text(T('inRoom', (room && room.owner) || '')), text(T('inRoomHint'), 'muted')], [
           button(T('leave'), () => sendAction('leave')),
-        ])
+        ]),
+        true
       );
     }
 
     // 前に参加した人(今いない人)に、1人ずつ招待を送る
     const known = room && ui.connected ? (room.known || []).filter((k) => k.online).slice(0, 4) : [];
     if (known.length) {
-      wrap.appendChild(
+      show(
+        'known:' + JSON.stringify(known.map((k) => k.key)),
         pill(
           [text(T('inviteKnown'), 'muted'), ...known.map((k) => text(person(k.label, k.service)))],
           known.length === 1
             ? [button(T('invite'), () => sendAction('invite', { target: known[0].key }), true)]
             : [button(T('inviteAll'), () => known.forEach((k) => sendAction('invite', { target: k.key })), true)]
-        )
+        ),
+        true
       );
     }
   }
