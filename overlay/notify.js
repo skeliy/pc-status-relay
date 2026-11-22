@@ -17,7 +17,7 @@ const RELAY = (process.env.LISTEN_TOGETHER_RELAY || 'https://pc-status-relay.onr
 const CARD_GAP = 8; // 通知どうしのすき間
 const PAD = 10; // 通知の窓の中の、影のための余白(toast.css の --pad と同じ)
 const MAX_CARDS = 4;
-const SHOW_MS = { voice: 7000, game: 6000 };
+const SHOW_MS = { voice: 3500, game: 6000 }; // 表示しておく時間(カーソルを乗せている間は消えない)
 const SIZE = { voice: { width: 380, height: 132 }, game: { width: 320, height: 96 } }; // 影の分の余白を含む
 
 // Windows の状態を2秒ごとに知らせる係は watch.ps1(PowerShell)。
