@@ -187,17 +187,20 @@ function syncWindowVisibility() {
 }
 
 // ---- 拡張機能との連絡 ----
-// 曲の見分け方: Apple Music はカタログの番号、Spotify は曲の番号(分からなければ曲名とアーティスト)
+// 曲の見分け方: Apple Music はカタログの番号、Spotify は曲の番号(分からなければ曲名とアーティスト)、
+// YouTube Music と YouTube は動画の番号(2つで共通なので、同じ動画なら同じ歌詞を使い回す)
+const SERVICES = ['apple', 'spotify', 'ytm', 'youtube'];
 function songKey(service, rawId) {
   if (typeof rawId !== 'string') return null;
   if (service === 'apple') return /^\d{1,20}$/.test(rawId) ? rawId : null;
   if (service === 'spotify') return /^(?:[A-Za-z0-9]{22}|meta:.{1,600})$/s.test(rawId) ? 'sp:' + rawId.slice(0, 300) : null;
+  if (service === 'ytm' || service === 'youtube') return /^[A-Za-z0-9_-]{11}$/.test(rawId) ? 'yt:' + rawId : null;
   return null;
 }
 
 function validTick(body) {
   if (!body || typeof body !== 'object') return null;
-  const service = body.service === 'spotify' ? 'spotify' : 'apple'; // 古い拡張機能は service を送らない(Apple Music だけ)
+  const service = SERVICES.includes(body.service) ? body.service : 'apple'; // 古い拡張機能は service を送らない(Apple Music だけ)
   const id = songKey(service, body.id);
   const pos = Number(body.pos);
   const at = Number(body.at);
@@ -249,8 +252,9 @@ function storeLyrics(id, entry) {
   updateStatus();
 }
 
-// ---- Spotify の歌詞: 公開されている歌詞の図書館 LRCLIB から取る ----
-// (Spotify の歌詞は、Spotify が使ってはいけないとしている非公開の仕組みでしか取れないため)
+// ---- Spotify・YouTube Music・YouTube の歌詞: 公開されている歌詞の図書館 LRCLIB から取る ----
+// (これらのサービスの歌詞は、公開されていない仕組みでしか取れないため。Spotify は規約で禁止もしている)
+// 曲の長さが違う歌詞(ミュージックビデオの前後に映像だけの部分がある時など)は、時間が合わないので使わない
 function cleanTitle(title) {
   return String(title || '')
     .replace(/\s*[([](?:feat\.?|ft\.?|with)\s[^)\]]*[)\]]/gi, '')
@@ -318,7 +322,7 @@ function askLrclib(tick) {
 
 function describeStatus() {
   const t = lastTick;
-  if (!t || !t.id) return T('曲を待っています(Apple Music か Spotify)', 'Waiting for a song (Apple Music or Spotify)');
+  if (!t || !t.id) return T('曲を待っています(Apple Music・Spotify・YouTube Music・YouTube)', 'Waiting for a song (Apple Music, Spotify, YouTube Music or YouTube)');
   const name = t.title ? `${t.title}${t.artist ? ' — ' + t.artist : ''}` : '';
   const cached = lyricsCache.get(t.id);
   let note = T('歌詞を取得しています', 'Fetching lyrics');
@@ -355,7 +359,7 @@ function handleTick(body) {
     return { ok: true };
   }
   updateStatus();
-  if (tick.service === 'spotify') {
+  if (tick.service !== 'apple') {
     askLrclib(tick);
     return { ok: true };
   }

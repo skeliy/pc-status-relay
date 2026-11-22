@@ -1,7 +1,7 @@
-// Apple Music(music.apple.com)と Spotify(open.spotify.com)のページの中で動く、歌詞オーバーレイ用の部品。
+// Apple Music・Spotify・YouTube Music・YouTube のページの中で動く、歌詞オーバーレイ用の部品。
 //  - 今の曲と、再生している秒数を 0.25 秒ごとに知らせる
 //  - Apple Music では、オーバーレイが「この曲の歌詞がほしい」と言った時だけ、その人の Apple Music のログインで歌詞を取ってくる
-//  - Spotify の歌詞は、オーバーレイのアプリが公開の歌詞の図書館(LRCLIB)から自分で取る
+//  - Spotify・YouTube Music・YouTube の歌詞は、オーバーレイのアプリが公開の歌詞の図書館(LRCLIB)から自分で取る
 // オーバーレイを入れていない人のPCでは、歌詞を取りに行くことはない。
 // 歌詞を取る仕組みは Apple が公開しているものではないので、変更されると動かなくなることがある。
 (function () {
@@ -37,10 +37,10 @@
     window.postMessage(Object.assign({ source: SRC_PAGE, kind }, body), '*');
   }
 
-  // Apple Music と Spotify のページで、今の曲と再生している秒数を知らせる
+  // 今の曲と再生している秒数を知らせる
   function tick() {
     const adapter = window.__pcsAdapter;
-    if (!adapter || !adapter.readState || !['apple', 'spotify'].includes(adapter.service)) return;
+    if (!adapter || !adapter.readState || !['apple', 'spotify', 'ytm', 'youtube'].includes(adapter.service)) return;
     const service = adapter.service;
     const m = service === 'apple' ? music() : null;
     if (service === 'apple' && !m) return;
@@ -52,7 +52,8 @@
     }
     if (!state || state.phase === 'loading') return; // 曲が変わった直後で、位置がまだ前の曲のまま
     const song = state.song;
-    if (!song || !song.id) {
+    // 広告の間や、音楽ではない動画は、歌詞を出さない(広告が終われば、覚えている歌詞をすぐ出す)
+    if (!song || !song.id || state.phase === 'ad') {
       post('tick', { tick: { service, id: null, playing: false, at: Date.now() } });
       return;
     }

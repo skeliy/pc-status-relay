@@ -21,8 +21,8 @@ const MUSIC_URL_PATTERNS = ['https://music.apple.com/*', 'https://open.spotify.c
 const SITE_SCRIPTS = [
   { match: 'https://music.apple.com/*', main: ['match.js', 'apple.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
   { match: 'https://open.spotify.com/*', main: ['match.js', 'spotify.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
-  { match: 'https://music.youtube.com/*', main: ['match.js', 'ytm.js'] },
-  { match: 'https://www.youtube.com/*', main: ['match.js', 'youtube.js'] },
+  { match: 'https://music.youtube.com/*', main: ['match.js', 'ytm.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
+  { match: 'https://www.youtube.com/*', main: ['match.js', 'youtube.js', 'lyrics.js'], extra: ['lyrics_relay.js'] },
 ];
 
 // 調べる時のために、最近の記録を残しておく(アイコンの画面の「デバッグ情報をコピー」で取り出せる)。
