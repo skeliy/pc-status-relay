@@ -271,7 +271,10 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
           if (j.full !== false && Array.isArray(j.p)) {
             watch.at = Date.now();
             watch.count = j.p.length;
-            watch.noPath = j.p.filter((x) => !x[2]).length;
+            const np = j.p.filter((x) => !x[2]);
+            watch.noPath = np.length;
+            // 場所が読めないプログラムの名前(チート対策に守られたゲームを見つける手がかり。名前だけ)
+            watch.noPathNames = [...new Set(np.map((x) => String(x[1] || '')))].sort().slice(0, 120);
             games.update(j.p);
             const now = [...games.playing].sort().join(', ');
             if (now !== lastPlaying) dlog(`games running: [${now}]`);
@@ -485,6 +488,7 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
         lastList: watch.at ? Math.round((Date.now() - watch.at) / 1000) + 's ago' : 'never',
         processes: watch.count,
         withoutPath: watch.noPath,
+        withoutPathNames: watch.noPathNames || [],
       },
       playing: [...games.playing],
       showing: cards.length,

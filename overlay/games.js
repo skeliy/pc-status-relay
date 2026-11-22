@@ -57,6 +57,13 @@ const KNOWN = {
   'phasmophobia': 'Phasmophobia',
   'repo': 'R.E.P.O.',
   'peak': 'PEAK',
+  // 基本無料のアニメ調のゲーム(チート対策で場所が読めないことが多いので、名前で決める)
+  'endfield': 'Arknights: Endfield',
+  'arknights': 'Arknights',
+  'bh3': 'Honkai Impact 3rd',
+  'bluearchive': 'Blue Archive',
+  'umamusume': 'Uma Musume',
+  'x6game-win64-shipping': 'Infinity Nikki',
 };
 
 // ゲームのフォルダにあっても、ゲームそのものではないもの
@@ -104,7 +111,9 @@ function gameOf(name, exePath) {
     return /minecraft|prismlauncher|multimc|modrinth|curseforge|atlauncher|gdlauncher|feather|lunar|badlion/i.test(p) ? 'Minecraft' : null;
   }
   if (key === 'client-win64-shipping') {
-    if (/wuthering|鳴潮/i.test(p)) return 'Wuthering Waves';
+    // 鳴潮(Wuthering Waves)の本体の名前。ほかのゲームも使う名前なので、場所が分かる時は場所で決める。
+    // チート対策で場所が読めない時は、この名前のゲームでいちばん多い鳴潮だとみなす
+    if (!p || /wuthering|鳴潮/i.test(p)) return 'Wuthering Waves';
     const store = STORE_DIRS.map((re) => p.match(re)).find(Boolean);
     return store ? store[1].trim() : null;
   }
