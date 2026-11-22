@@ -32,9 +32,11 @@ const lastGame = new Map(); // `${discordId}|${game}` -> 時刻
 const discord = {
   ready: false,
   status: BOT_TOKEN ? 'connecting' : 'no-token',
-  guild: { id: GUILD_ID, name: '', icon: null },
+  guild: { id: GUILD_ID, name: '', icon: null, ownerId: null },
   channels: new Map(), // id -> name
-  members: new Map(), // id -> { id, name, username, avatar, bot }
+  overwrites: new Map(), // チャンネル id -> 権限の上書き [{ id, type, allow, deny }]
+  roles: new Map(), // ロール id -> 権限(BigInt)
+  members: new Map(), // id -> { id, name, username, avatar, bot, roles }
   voice: new Map(), // userId -> channelId
 };
 
@@ -57,9 +59,60 @@ function rememberMember(m) {
     username: u.username || '',
     avatar: avatarUrl(u.id, u, m),
     bot: !!u.bot,
+    roles: Array.isArray(m.roles) ? m.roles.map(String) : null,
   };
   discord.members.set(u.id, rec);
   return rec;
+}
+
+function rememberChannel(c) {
+  if (!c || !c.id) return;
+  discord.channels.set(c.id, c.name);
+  discord.overwrites.set(c.id, Array.isArray(c.permission_overwrites) ? c.permission_overwrites : []);
+}
+function rememberRole(r) {
+  if (!r || !r.id) return;
+  try {
+    discord.roles.set(r.id, BigInt(r.permissions || '0'));
+  } catch (e) {}
+}
+
+// その人が、そのチャンネルを見られるか(Discord の権限の決まりと同じ順で計算する)
+//  1. @everyone と持っているロールの権限を合わせる(管理者なら何でも見られる)
+//  2. チャンネルの上書き: @everyone → ロール(拒否をまとめて外してから、許可をまとめて足す)→ その人だけの上書き
+// 分からない時(ロールやチャンネルの情報が無い)は「見られない」として、知らせない
+const VIEW_CHANNEL = 1n << 10n;
+const ADMINISTRATOR = 1n << 3n;
+function canView(userId, channelId) {
+  if (!userId || !channelId) return false;
+  if (discord.guild.ownerId && userId === discord.guild.ownerId) return true;
+  const m = discord.members.get(userId);
+  const ow = discord.overwrites.get(channelId);
+  if (!m || !m.roles || !ow || !discord.roles.has(GUILD_ID)) return false;
+  let perms = discord.roles.get(GUILD_ID);
+  for (const r of m.roles) perms |= discord.roles.get(r) || 0n;
+  if (perms & ADMINISTRATOR) return true;
+  const big = (v) => {
+    try {
+      return BigInt(v || '0');
+    } catch (e) {
+      return 0n;
+    }
+  };
+  const everyone = ow.find((o) => o.id === GUILD_ID);
+  if (everyone) perms = (perms & ~big(everyone.deny)) | big(everyone.allow);
+  let allow = 0n;
+  let deny = 0n;
+  for (const o of ow) {
+    if (o.type === 0 && o.id !== GUILD_ID && m.roles.includes(o.id)) {
+      allow |= big(o.allow);
+      deny |= big(o.deny);
+    }
+  }
+  perms = (perms & ~deny) | allow;
+  const mine = ow.find((o) => o.type === 1 && o.id === userId);
+  if (mine) perms = (perms & ~big(mine.deny)) | big(mine.allow);
+  return (perms & VIEW_CHANNEL) !== 0n;
 }
 
 function guildIcon() {
@@ -121,14 +174,29 @@ function onVoiceState(d) {
   }
   if (count !== 1) return;
   const who = member || { id: d.user_id, name: d.user_id, avatar: avatarUrl(d.user_id) };
+  notifyVoice(who, d.channel_id).catch((e) => console.warn('[discord] voice notify failed:', e.message));
+}
+
+async function notifyVoice(who, channelId) {
+  const msg = {
+    type: 'voice',
+    guild: { name: discord.guild.name, icon: guildIcon() },
+    user: { id: who.id, name: who.name, avatar: who.avatar },
+    channel: { id: channelId, name: discord.channels.get(channelId) || '' },
+  };
+  // 受け取る人のロールが分からない時は、先に Discord に聞いておく
+  const ids = new Set(Object.values(companions).map((c) => c.discordId).filter((id) => id && id !== who.id));
+  for (const id of ids) {
+    const m = discord.members.get(id);
+    if (!m || !m.roles) {
+      discord.members.delete(id);
+      await memberInfo(id);
+    }
+  }
   broadcast(
-    {
-      type: 'voice',
-      guild: { name: discord.guild.name, icon: guildIcon() },
-      user: { id: who.id, name: who.name, avatar: who.avatar },
-      channel: { id: d.channel_id, name: discord.channels.get(d.channel_id) || '' },
-    },
-    (c) => c.discordId !== d.user_id // 自分が入った時は、自分には知らせない
+    msg,
+    // 自分が入った時は自分には知らせない。その通話チャンネルを見る権限が無い人にも知らせない
+    (c) => c.discordId !== who.id && canView(c.discordId, channelId)
   );
 }
 
@@ -136,8 +204,12 @@ function onGuildCreate(g) {
   if (!g || g.id !== GUILD_ID) return;
   discord.guild.name = g.name || '';
   discord.guild.icon = g.icon || null;
+  discord.guild.ownerId = g.owner_id || null;
   discord.channels.clear();
-  for (const c of g.channels || []) discord.channels.set(c.id, c.name);
+  discord.overwrites.clear();
+  for (const c of g.channels || []) rememberChannel(c);
+  discord.roles.clear();
+  for (const r of g.roles || []) rememberRole(r);
   for (const m of g.members || []) rememberMember(m);
   discord.voice.clear();
   for (const v of g.voice_states || []) if (v.channel_id) discord.voice.set(v.user_id, v.channel_id); // 今いる人は数えるだけ(知らせない)
@@ -196,10 +268,17 @@ function connect() {
       if (p.t === 'GUILD_CREATE') onGuildCreate(d);
       else if (p.t === 'VOICE_STATE_UPDATE') onVoiceState(d);
       else if ((p.t === 'GUILD_MEMBER_ADD' || p.t === 'GUILD_MEMBER_UPDATE') && d.guild_id === GUILD_ID) rememberMember(d);
-      else if ((p.t === 'CHANNEL_CREATE' || p.t === 'CHANNEL_UPDATE') && d.guild_id === GUILD_ID) discord.channels.set(d.id, d.name);
+      else if ((p.t === 'CHANNEL_CREATE' || p.t === 'CHANNEL_UPDATE') && d.guild_id === GUILD_ID) rememberChannel(d);
+      else if (p.t === 'CHANNEL_DELETE' && d.guild_id === GUILD_ID) {
+        discord.channels.delete(d.id);
+        discord.overwrites.delete(d.id);
+      } else if ((p.t === 'GUILD_ROLE_CREATE' || p.t === 'GUILD_ROLE_UPDATE') && d.guild_id === GUILD_ID) rememberRole(d.role);
+      else if (p.t === 'GUILD_ROLE_DELETE' && d.guild_id === GUILD_ID) discord.roles.delete(d.role_id);
       else if (p.t === 'GUILD_UPDATE' && d.id === GUILD_ID) {
         discord.guild.name = d.name || discord.guild.name;
         discord.guild.icon = d.icon || null;
+        discord.guild.ownerId = d.owner_id || discord.guild.ownerId;
+        for (const r of d.roles || []) rememberRole(r);
       }
     }
   });
@@ -412,4 +491,4 @@ function stop() {
   if (ws) ws.close();
 }
 
-module.exports = { handle, start, stop, _test: { discord, companions, sign, onVoiceState, onGuildCreate } };
+module.exports = { handle, start, stop, _test: { discord, companions, sign, onVoiceState, onGuildCreate, canView } };
