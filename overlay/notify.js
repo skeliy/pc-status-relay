@@ -38,6 +38,16 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
   let soundWin = null;
   let helper = null;
   let sentKey = null; // 最後に中継サーバーへ送った名前など(変わったら送り直す)
+  // 調べるための記録(拡張機能の「Copy debug info」に入る)。鍵などは入れない
+  const logLines = [];
+  const watch = { at: 0, count: 0, noPath: 0, lines: 0, started: 0, exits: 0 };
+  function dlog(msg) {
+    const d = new Date();
+    const hh = (n) => String(n).padStart(2, '0');
+    logLines.push(`${hh(d.getHours())}:${hh(d.getMinutes())}:${hh(d.getSeconds())} ${msg}`);
+    if (logLines.length > 200) logLines.splice(0, logLines.length - 200);
+  }
+  const blockedWhy = () => `q=${quns} check=${checkWorks ? 'ok' : 'no'} playing=[${[...games.playing].join(', ')}]`;
 
   const lang = () => (me.lang === 'ja' || me.lang === 'en' ? me.lang : appLang());
   const T = (j, e) => (lang() === 'ja' ? j : e);
@@ -163,15 +173,18 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
         }
         const r = await call('GET', `/api/companion/poll?id=${encodeURIComponent(me.id)}&key=${encodeURIComponent(me.key)}&since=${since}`);
         if (r.status === 401) {
+          dlog('poll 401: relay forgot us, hello again');
           needHello = true; // 中継サーバーが再起動して、こちらを忘れた
           continue;
         }
         if (r.status !== 200) throw new Error('poll ' + r.status);
+        if (!relayOk) dlog('relay connected');
         relayOk = true;
         if (r.data.seq < since) since = 0;
         else since = r.data.seq;
         for (const m of r.data.messages || []) handle(m);
       } catch (e) {
+        if (relayOk) dlog('relay error: ' + e.message);
         relayOk = false;
         needHello = true;
         await sleep(5000);
@@ -181,6 +194,10 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
 
   function handle(m) {
     const s = getSettings();
+    const who = (m.user && m.user.name) || '?';
+    if (m.type === 'game') dlog(`got game: ${who} ${m.game} (game notify ${s.gameNotify ? 'on' : 'off'})`);
+    else if (m.type === 'voice') dlog(`got voice: ${who} (voice notify ${s.voiceNotify ? 'on' : 'off'})`);
+    else dlog('got ' + m.type);
     if (m.type === 'assigned') {
       me.discordId = m.discordId || null;
       me.sig = m.sig || null;
@@ -188,20 +205,31 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
       approved = !!me.discordId;
       save();
     } else if (m.type === 'voice' && s.voiceNotify) {
-      if (Date.now() - (m.at || Date.now()) > 60000) return; // 古すぎるお知らせは出さない
+      if (Date.now() - (m.at || Date.now()) > 60000) return dlog('  -> not shown: too old'); // 古すぎるお知らせは出さない
       notifyVoice(m);
     } else if (m.type === 'game' && s.gameNotify) {
-      if (Date.now() - (m.at || Date.now()) > 60000) return;
+      if (Date.now() - (m.at || Date.now()) > 60000) return dlog('  -> not shown: too old');
       notifyGame(m);
     }
   }
 
   async function reportGame(game) {
     const s = getSettings();
-    if (!s.gameNotify || !approved || !me.id) return; // ゲームの通知を切っている人は、自分のゲームも知らせない
+    dlog(`game started here: ${game}`);
+    // ゲームの通知を切っている人は、自分のゲームも知らせない
+    if (!s.gameNotify) return dlog('  -> not sent: game notify is off');
+    if (!me.id) return dlog('  -> not sent: not registered yet');
+    if (!approved) return dlog('  -> not sent: not assigned on /admin yet');
     try {
-      await call('POST', '/api/companion/game', { id: me.id, key: me.key, game });
-    } catch (e) {}
+      const r = await call('POST', '/api/companion/game', { id: me.id, key: me.key, game });
+      const d = r.data || {};
+      if (r.status !== 200) dlog(`  -> relay said ${r.status} ${d.error || ''}`);
+      else if (d.skipped) dlog(`  -> relay skipped: ${d.skipped} (same game within 10 min)`);
+      else if (Array.isArray(d.to)) dlog(`  -> sent to ${d.sent}: ${d.to.map((t) => t.name + (t.online ? '' : ' (offline)')).join(', ') || 'nobody'}`);
+      else dlog('  -> sent');
+    } catch (e) {
+      dlog('  -> send failed: ' + e.message);
+    }
   }
 
   // ---- 全画面かどうか ----
@@ -214,6 +242,7 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
   }
 
   const games = new GameWatcher({ onStart: (g) => reportGame(g) });
+  let lastPlaying = '';
 
   function startHelper() {
     const fake = process.env.LISTEN_TOGETHER_WATCH_CMD; // テストで使う
@@ -222,6 +251,8 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
       ? spawn('node', [fake], { stdio: ['ignore', 'pipe', 'ignore'] })
       : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', path.join(dir, 'watch.ps1')], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     helper = child;
+    watch.started++;
+    dlog('watcher started');
     let buf = '';
     child.stdout.on('data', (d) => {
       buf += d.toString('utf8');
@@ -232,13 +263,26 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
         if (!line) continue;
         try {
           const j = JSON.parse(line);
-          quns = Number.isFinite(j.q) ? j.q : -1;
+          watch.lines++;
+          const q = Number.isFinite(j.q) ? j.q : -1;
+          if (q !== quns) dlog(`screen state ${quns} -> ${q} (3 = fullscreen, 1 = locked)`);
+          quns = q;
           if (quns > 0) checkWorks = true;
-          if (j.full !== false && Array.isArray(j.p)) games.update(j.p);
+          if (j.full !== false && Array.isArray(j.p)) {
+            watch.at = Date.now();
+            watch.count = j.p.length;
+            watch.noPath = j.p.filter((x) => !x[2]).length;
+            games.update(j.p);
+            const now = [...games.playing].sort().join(', ');
+            if (now !== lastPlaying) dlog(`games running: [${now}]`);
+            lastPlaying = now;
+          }
         } catch (e) {}
       }
     });
-    child.on('exit', () => {
+    child.on('exit', (code) => {
+      watch.exits++;
+      dlog('watcher stopped (code ' + code + '), restart in 10s');
       helper = null;
       setTimeout(startHelper, 10000); // 止まったら少し待って起動し直す
     });
@@ -337,7 +381,8 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
 
   function notifyVoice(m) {
     playSound(); // 全画面の時も、音だけは鳴らす
-    if (blocked()) return;
+    if (blocked()) return dlog('  -> sound only (fullscreen/locked): ' + blockedWhy());
+    dlog('  -> shown');
     showCard('voice', {
       guildName: (m.guild && m.guild.name) || 'Discord',
       guildIcon: (m.guild && m.guild.icon) || null,
@@ -348,7 +393,8 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
   }
 
   function notifyGame(m) {
-    if (blocked()) return; // ゲームの通知は音なし。全画面の時は何もしない
+    if (blocked()) return dlog('  -> not shown (fullscreen/locked/in a game): ' + blockedWhy()); // ゲームの通知は音なし。全画面の時は何もしない
+    dlog('  -> shown');
     showCard('game', {
       name: (m.user && m.user.name) || '?',
       avatar: (m.user && m.user.avatar) || null,
@@ -384,7 +430,7 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
     }
     if (changed) save();
     // 名前が変わったら、中継サーバーにも伝える(割り当てのページに新しい名前で出るように)
-    if (me.id && sentKey !== null && profileKey() !== sentKey) hello().catch(() => {});
+    if (me.id && sentKey !== null && profileKey() !== sentKey) hello().catch((e) => dlog('hello failed: ' + e.message));
   }
 
   function test(kind) {
@@ -419,7 +465,34 @@ function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appL
     };
   }
 
-  return { start, setProfile, test, state, _debug: { handle, blocked, games, setQuns: (q, works) => ((quns = q), (checkWorks = works)), cards: () => cards } };
+  // 拡張機能の「Copy debug info」に入れるもの(鍵・署名は入れない)
+  function debug() {
+    const s = getSettings();
+    return {
+      registered: !!me.id,
+      id: me.id ? me.id.slice(0, 6) + '…' : null,
+      assigned: approved,
+      me: me.me ? me.me.name : null,
+      names: me.names,
+      settings: { voice: !!s.voiceNotify, game: !!s.gameNotify },
+      relay: relayOk,
+      screen: { q: quns, check: checkWorks },
+      watcher: {
+        running: !!helper,
+        started: watch.started,
+        stopped: watch.exits,
+        lines: watch.lines,
+        lastList: watch.at ? Math.round((Date.now() - watch.at) / 1000) + 's ago' : 'never',
+        processes: watch.count,
+        withoutPath: watch.noPath,
+      },
+      playing: [...games.playing],
+      showing: cards.length,
+      log: logLines.slice(),
+    };
+  }
+
+  return { start, setProfile, test, state, debug, _debug: { handle, blocked, games, setQuns: (q, works) => ((quns = q), (checkWorks = works)), cards: () => cards } };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

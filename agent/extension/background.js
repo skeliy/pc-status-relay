@@ -990,7 +990,19 @@ async function debugInfo() {
       return { path: pi ? pi.path : null, playlistPage: pi ? pi.playlist : null, myService: chosen, shown: !!(pi && pi.playlist && chosen === 'apple') };
     })(),
   };
-  return '=== Listen Together debug ===\n' + JSON.stringify(info, null, 2) + '\n\n=== log (latest last) ===\n' + debugLines.join('\n');
+  // Listen Together アプリ(通知・歌詞)の記録も入れる
+  let appText = 'not running (or not installed)';
+  const appDbg = await overlayPost('/debug', {}, true);
+  if (appDbg && appDbg.ok) {
+    const n = appDbg.notify || {};
+    const log = n.log || [];
+    delete n.log;
+    appText = JSON.stringify({ version: appDbg.version, platform: appDbg.platform, lyricsOn: appDbg.lyricsOn, notify: n }, null, 2) + '\n--- app log (latest last) ---\n' + (log.join('\n') || '(empty)');
+  } else if (appDbg === null) {
+    const st = await overlayPost('/state', {}, true);
+    if (st && st.ok) appText = 'running, but too old to give debug info (needs 1.4.3+)';
+  }
+  return '=== Listen Together debug ===\n' + JSON.stringify(info, null, 2) + '\n\n=== log (latest last) ===\n' + debugLines.join('\n') + '\n\n=== Listen Together app ===\n' + appText;
 }
 
 // ---------------------------------------------------------------- タブ

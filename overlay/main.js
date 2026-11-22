@@ -425,6 +425,14 @@ function startServer() {
         }
         return reply(200, { ok: true });
       }
+      if (req.url === '/debug') {
+        // 拡張機能の「Copy debug info」から(鍵などは入れない)
+        let version = '';
+        try {
+          version = fs.readFileSync(path.join(__dirname, 'VERSION'), 'utf8').trim();
+        } catch (e) {}
+        return reply(200, { ok: true, version, platform: process.platform, lyricsOn: !!settings.enabled, notify: notifier ? notifier.debug() : null });
+      }
       if (req.url === '/notify-test') {
         if (notifier) setImmediate(() => notifier.test(body.kind === 'game' ? 'game' : 'voice'));
         return reply(200, { ok: true });

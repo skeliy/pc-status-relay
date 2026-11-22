@@ -326,12 +326,15 @@ function push(c, msg) {
 }
 
 function broadcast(msg, filter) {
+  const to = [];
   for (const id of Object.keys(companions)) {
     const c = companions[id];
     if (!c.discordId) continue; // 持ち主が選ぶまでは届けない
     if (filter && !filter(c)) continue;
     push(c, msg);
+    to.push(c);
   }
+  return to;
 }
 
 function auth(data) {
@@ -439,11 +442,12 @@ async function reportGame(c, game) {
   if (!c.discordId) return { error: 'not-approved', status: 403 };
   const k = `${c.discordId}|${name.toLowerCase()}`;
   const now = Date.now();
-  if (now - (lastGame.get(k) || 0) < GAME_REPEAT_MS) return { ok: true, skipped: true };
+  if (now - (lastGame.get(k) || 0) < GAME_REPEAT_MS) return { ok: true, skipped: 'repeat', sent: 0 };
   lastGame.set(k, now);
   const me = await publicMember(c.discordId);
-  broadcast({ type: 'game', user: me, game: name }, (o) => o.discordId !== c.discordId);
-  return { ok: true };
+  const to = broadcast({ type: 'game', user: me, game: name }, (o) => o.discordId !== c.discordId);
+  // 調べる時のために、だれに届けたか(名前と、いまアプリがつながっているか)を返す
+  return { ok: true, sent: to.length, to: to.map((o) => ({ name: displayName(o), online: Date.now() - o.lastSeen < 90000 })) };
 }
 
 // サーバーのメンバー全員(割り当てのページの選択肢)。人数の多いサーバーでは、ボットの起動時に
