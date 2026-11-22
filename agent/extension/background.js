@@ -950,6 +950,8 @@ async function endSelfRoom() {
 }
 
 // 調べるための情報(鍵・パスワード・通行証は入れない)
+const lyricsTicks = new Map(); // タブ -> 最後に届いた歌詞用の知らせ(デバッグ用)
+
 async function debugInfo() {
   await loadAll();
   const p = primaryTab();
@@ -968,6 +970,7 @@ async function debugInfo() {
     room: c ? { id: c.id, mode: c.mode, role: c.role, owner: room.owner, connected: room.connected, host: room.host === room.you } : null,
     members: (room.members || []).map((m) => `${m.label} (${m.service || '?'})${m.host ? ' host' : ''}`),
     musicTabs: Array.from(tabs.values()).map((t) => ({ service: t.state && t.state.service, playing: !!(t.state && t.state.isPlaying), primary: p ? t === p : false })),
+    lyricsTicks: Array.from(lyricsTicks.values()),
     player: {
       service: st.service,
       phase: st.phase,
@@ -997,7 +1000,7 @@ async function debugInfo() {
     const n = appDbg.notify || {};
     const log = n.log || [];
     delete n.log;
-    appText = JSON.stringify({ version: appDbg.version, platform: appDbg.platform, lyricsOn: appDbg.lyricsOn, notify: n }, null, 2) + '\n--- app log (latest last) ---\n' + (log.join('\n') || '(empty)');
+    appText = JSON.stringify({ version: appDbg.version, platform: appDbg.platform, lyricsOn: appDbg.lyricsOn, lyrics: appDbg.lyrics, notify: n }, null, 2) + '\n--- app log (latest last) ---\n' + (log.join('\n') || '(empty)');
   } else if (appDbg === null) {
     const st = await overlayPost('/state', {}, true);
     if (st && st.ok) appText = 'running, but too old to give debug info (needs 1.4.3+)';
@@ -1334,7 +1337,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'lyrics-tick' && sender.tab) {
     // Apple Music と Spotify の両方が開いている時は、今聴いているほう(一緒に聴く時と同じタブ)だけを送る
     const p = primaryTab();
-    work = p && p.id !== sender.tab.id ? Promise.resolve({}) : overlayPost('/tick', message.tick).then((d) => d || {});
+    const t = message.tick || {};
+    const rec = { at: new Date().toLocaleTimeString(), service: t.service, id: t.id, title: t.title, playing: t.playing, pos: Math.round(t.pos || 0) };
+    lyricsTicks.set(sender.tab.id, rec);
+    if (p && p.id !== sender.tab.id) {
+      rec.sent = 'no (another tab is in use: ' + ((p.state && p.state.service) || '?') + ')';
+      work = Promise.resolve({});
+    } else {
+      work = overlayPost('/tick', t).then((d) => {
+        rec.sent = d ? 'yes' : 'app did not answer';
+        return d || {};
+      });
+    }
   }
   else if (message.type === 'lyrics-data' && sender.tab) work = overlayPost('/lyrics', message.lyrics).then(() => ({ ok: true }));
   if (work) { /* 歌詞オーバーレイの連絡 */ }

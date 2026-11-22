@@ -66,6 +66,7 @@ let moveMode = false;
 let dragTimer = null;
 let lyricsCache = new Map(); // 曲の番号 -> { ttml, status, at, kind }
 let asking = new Map(); // 曲の番号 -> 頼んだ時刻
+const lyricsLookups = []; // 「デバッグ情報をコピー」用: 最近の歌詞探しの記録(歌詞そのものは入れない)
 let notifier = null;
 
 // ---- 設定の保存 ----
@@ -277,9 +278,12 @@ async function lrclibGet(pathname, params) {
     headers: { 'User-Agent': `LyricsOverlay/${version} (https://github.com/skeliy/pc-status-relay)` },
     signal: AbortSignal.timeout(12000),
   });
+  if (lrclibGet.steps) lrclibGet.steps.push(`${pathname} ${res.status}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`LRCLIB ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  if (lrclibGet.steps && Array.isArray(json)) lrclibGet.steps[lrclibGet.steps.length - 1] += ` (${json.length}: ${json.slice(0, 6).map((x) => Math.round(x.duration) + (x.syncedLyrics ? 's' : '-')).join(' ')})`;
+  return json;
 }
 
 function bestLrclib(list, duration) {
@@ -313,12 +317,32 @@ async function fetchLrclib(tick) {
 }
 
 function askLrclib(tick) {
+  const record = { at: new Date().toISOString(), key: tick.id, service: tick.service, title: tick.title, artist: tick.artist, album: tick.album, duration: tick.duration, steps: [] };
+  lyricsLookups.push(record);
+  if (lyricsLookups.length > 8) lyricsLookups.shift();
+  lrclibGet.steps = record.steps;
   fetchLrclib(tick)
     .catch((e) => {
       console.error('lyrics lookup failed:', e.message);
+      record.error = String((e && e.cause && e.cause.code) || (e && e.message) || e);
       return { status: 'error', kind: 'lrclib' };
     })
-    .then((r) => storeLyrics(tick.id, r));
+    .then((r) => {
+      record.result = r.status + (r.lrc ? ` (${r.lrc.split('\n').length} lines)` : '');
+      storeLyrics(tick.id, r);
+    });
+}
+
+function lyricsDebug() {
+  const t = lastTick;
+  const cached = t && t.id ? lyricsCache.get(t.id) : null;
+  return {
+    status: statusText,
+    shown: wantVisible,
+    lastTick: t ? { service: t.service, id: t.id, title: t.title, artist: t.artist, duration: t.duration, playing: t.playing, pos: Math.round(t.pos), secondsAgo: Math.round((Date.now() - (lastTickAt || 0)) / 1000) } : null,
+    current: cached ? { status: cached.status, kind: cached.kind } : null,
+    lookups: lyricsLookups,
+  };
 }
 
 function describeStatus() {
@@ -347,7 +371,9 @@ function updateStatus() {
 }
 
 let currentId = null;
+let lastTickAt = 0;
 function handleTick(body) {
+  lastTickAt = Date.now();
   const tick = validTick(body);
   if (!tick) return { ok: false };
   const changed = tick.id !== currentId;
@@ -431,7 +457,7 @@ function startServer() {
         try {
           version = fs.readFileSync(path.join(__dirname, 'VERSION'), 'utf8').trim();
         } catch (e) {}
-        return reply(200, { ok: true, version, platform: process.platform, lyricsOn: !!settings.enabled, notify: notifier ? notifier.debug() : null });
+        return reply(200, { ok: true, version, platform: process.platform, lyricsOn: !!settings.enabled, lyrics: lyricsDebug(), notify: notifier ? notifier.debug() : null });
       }
       if (req.url === '/notify-test') {
         if (notifier) setImmediate(() => notifier.test(body.kind === 'game' ? 'game' : 'voice'));
