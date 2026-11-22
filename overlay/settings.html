@@ -4,11 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
-<title>Lyrics Overlay</title>
+<title>Listen Together</title>
 <link rel="stylesheet" href="settings.css">
 </head>
 <body>
 <main>
+  <section class="notify" aria-labelledby="notifyTitle">
+    <h2 id="notifyTitle" data-t="notifyTitle"></h2>
+    <p id="notifyState" class="state"></p>
+    <div class="nrow"><label class="check"><input type="checkbox" id="voiceNotify"><span data-t="voiceNotify"></span></label><button type="button" class="test" data-test="voice" data-t="test"></button></div>
+    <small data-t="voiceHelp"></small>
+    <div class="nrow"><label class="check"><input type="checkbox" id="gameNotify"><span data-t="gameNotify"></span></label><button type="button" class="test" data-test="game" data-t="test"></button></div>
+    <small data-t="gameHelp"></small>
+  </section>
+  <h2 data-t="lyricsTitle"></h2>
   <p id="status" role="status"></p>
   <label class="check"><input type="checkbox" id="enabled"><span data-t="enabled"></span></label>
 

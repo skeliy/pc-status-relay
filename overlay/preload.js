@@ -24,4 +24,6 @@ contextBridge.exposeInMainWorld('settingsApi', {
   onStatus: on('status'),
   onSettings: on('settings'),
   onMoveMode: on('move-mode'),
+  test: (kind) => ipcRenderer.send('settings-test', kind),
+  notifyState: () => ipcRenderer.invoke('settings-notify-state'),
 });

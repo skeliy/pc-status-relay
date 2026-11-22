@@ -1,4 +1,5 @@
-// 歌詞オーバーレイの本体。
+// Listen Together アプリ(歌詞オーバーレイと、通話・ゲームの通知)の本体。
+//  - 通話・ゲームの通知は notify.js
 //  - 透明で、クリックが下の画面に通り抜ける、常に手前のウィンドウを出す
 //  - ブラウザの拡張機能(Listen Together)から http://127.0.0.1:8789 で曲と歌詞を受け取る
 //  - 通知領域のアイコンから設定を開く
@@ -9,6 +10,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const vm = require('vm');
+const { createNotifier } = require('./notify');
 
 const PORT = 8789;
 const LRCLIB = process.env.LYRICS_OVERLAY_LRCLIB_BASE || 'https://lrclib.net';
@@ -37,6 +39,8 @@ const DEFAULTS = {
   offsetMs: 0, // 歌詞の表示を早める(+)・遅らせる(-)ミリ秒
   shadow: true,
   autoStart: true,
+  voiceNotify: false, // Discord の通話に人が入った時の通知(はじめは切っておく)
+  gameNotify: true, // 友達がゲームを始めた時の通知
 };
 const LIMITS = {
   opacity: [10, 100],
@@ -61,6 +65,7 @@ let moveMode = false;
 let dragTimer = null;
 let lyricsCache = new Map(); // 曲の番号 -> { ttml, status, at, kind }
 let asking = new Map(); // 曲の番号 -> 頼んだ時刻
+let notifier = null;
 
 // ---- 設定の保存 ----
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
@@ -391,7 +396,7 @@ function startServer() {
         return reply(400, { ok: false });
       }
       if (req.url === '/tick') return reply(200, handleTick(body));
-      if (req.url === '/state') return reply(200, { ok: true, enabled: settings.enabled });
+      if (req.url === '/state') return reply(200, { ok: true, enabled: settings.enabled, features: ['notify'], notify: notifier ? notifier.state() : null });
       if (req.url === '/open-settings') {
         // 窓を作るのに時間がかかっても拡張機能を待たせないよう、先に返事をする
         reply(200, { ok: true });
@@ -399,9 +404,20 @@ function startServer() {
         return undefined;
       }
       if (req.url === '/settings') {
-        if (typeof body.enabled !== 'boolean') return reply(400, { ok: false });
-        changeSettings({ enabled: body.enabled });
-        return reply(200, { ok: true, enabled: settings.enabled });
+        const patch = {};
+        for (const k of ['enabled', 'voiceNotify', 'gameNotify']) if (typeof body[k] === 'boolean') patch[k] = body[k];
+        if (!Object.keys(patch).length) return reply(400, { ok: false });
+        changeSettings(patch);
+        return reply(200, { ok: true, enabled: settings.enabled, notify: notifier ? notifier.state() : null });
+      }
+      if (req.url === '/profile') {
+        // 拡張機能から: その人の名前と、通知に使う言語
+        if (notifier) notifier.setProfile({ label: typeof body.label === 'string' ? body.label : '', lang: body.lang });
+        return reply(200, { ok: true });
+      }
+      if (req.url === '/notify-test') {
+        if (notifier) setImmediate(() => notifier.test(body.kind === 'game' ? 'game' : 'voice'));
+        return reply(200, { ok: true });
       }
       if (req.url === '/lyrics') return reply(200, handleLyrics(body));
       return reply(404, { ok: false });
@@ -481,12 +497,12 @@ function openSettings() {
   }
   settingsWin = new BrowserWindow({
     width: 440,
-    height: 790,
+    height: 900,
     resizable: true,
     minimizable: false,
     maximizable: false,
     autoHideMenuBar: true,
-    title: T('歌詞オーバーレイの設定', 'Lyrics Overlay settings'),
+    title: T('Listen Together の設定', 'Listen Together settings'),
     backgroundColor: '#17171a',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
@@ -514,7 +530,7 @@ function changeSettings(patch) {
   refreshOverlayWindow();
   syncWindowVisibility();
   if (before.autoStart !== settings.autoStart) applyAutoStart();
-  if (before.enabled !== settings.enabled) rebuildTrayMenu();
+  if (before.enabled !== settings.enabled || before.voiceNotify !== settings.voiceNotify || before.gameNotify !== settings.gameNotify) rebuildTrayMenu();
   if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send('settings', settings);
 }
 
@@ -526,6 +542,8 @@ function rebuildTrayMenu() {
       { label: statusText, enabled: false },
       { type: 'separator' },
       { label: T('歌詞を表示する', 'Show lyrics'), type: 'checkbox', checked: settings.enabled, click: (item) => changeSettings({ enabled: item.checked }) },
+      { label: T('通話の通知', 'Call notifications'), type: 'checkbox', checked: settings.voiceNotify, click: (item) => changeSettings({ voiceNotify: item.checked }) },
+      { label: T('ゲームの通知', 'Game notifications'), type: 'checkbox', checked: settings.gameNotify, click: (item) => changeSettings({ gameNotify: item.checked }) },
       { label: T('設定…', 'Settings…'), click: openSettings },
       { type: 'separator' },
       { label: T('終了', 'Quit'), click: () => app.quit() },
@@ -536,7 +554,7 @@ function rebuildTrayMenu() {
 function createTray() {
   const image = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png'));
   tray = new Tray(image);
-  tray.setToolTip('Lyrics Overlay');
+  tray.setToolTip('Listen Together');
   tray.on('click', openSettings);
   rebuildTrayMenu();
 }
@@ -561,11 +579,16 @@ ipcMain.on('overlay-move-done', () => setMoveMode(false));
 ipcMain.on('settings-move-mode', (_e, on) => setMoveMode(on));
 ipcMain.handle('settings-get', () => ({
   settings,
+  notify: notifier ? notifier.state() : null,
   moveMode,
   status: statusText,
   limits: LIMITS,
   displays: screen.getAllDisplays().map((d, i) => ({ id: d.id, label: `${T('ディスプレイ', 'Display')} ${i + 1} (${d.size.width}×${d.size.height})`, primary: d.id === screen.getPrimaryDisplay().id })),
 }));
+ipcMain.on('settings-test', (_e, kind) => {
+  if (notifier) notifier.test(kind === 'game' ? 'game' : 'voice');
+});
+ipcMain.handle('settings-notify-state', () => (notifier ? notifier.state() : null));
 ipcMain.on('settings-set', (_e, patch) => {
   if (patch && typeof patch === 'object') changeSettings(patch);
 });
@@ -631,6 +654,8 @@ if (!TEST_MODE && !app.requestSingleInstanceLock()) {
 } else {
   // 他のウィンドウに隠れていると判断されて描画が止まらないようにする
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  // 通話の通知の音を、画面を触らなくても鳴らせるようにする
+  app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
   // 拡張機能のスイッチから起動された時は、窓を開かずに裏で動くだけにする。決まったリンク以外の中身は読まない
   const linkIn = (argv) => argv.map((a) => String(a).toLowerCase()).find((a) => a.startsWith('lyricsoverlay:'));
   const wantsSettings = (argv) => {
@@ -656,6 +681,9 @@ if (!TEST_MODE && !app.requestSingleInstanceLock()) {
     createOverlay();
     if (!TEST_MODE) createTray();
     startServer();
+    notifier = createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings: () => settings, appLang: () => (ja ? 'ja' : 'en'), dir: __dirname, testMode: TEST_MODE });
+    notifier.start();
+    if (process.env.LISTEN_TOGETHER_TEST_HOOK) global.__notifier = notifier;
     screen.on('display-metrics-changed', refreshOverlayWindow);
     screen.on('display-added', refreshOverlayWindow);
     screen.on('display-removed', refreshOverlayWindow);

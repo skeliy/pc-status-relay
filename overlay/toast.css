@@ -1,0 +1,40 @@
+/* 右下に出す小さな通知。窓は透明で、影のための余白(--pad)の内側にカードを描く */
+:root { --pad: 10px; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+body { padding: var(--pad); font: 13px/1.35 "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; color: #f2f3f5; }
+.card { height: 100%; border-radius: 10px; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); opacity: 0; transform: translateX(24px);
+        transition: opacity .22s ease, transform .22s ease; position: relative; overflow: hidden; }
+.card.in { opacity: 1; transform: none; }
+.card.out { opacity: 0; transform: translateX(16px); }
+.voice, .game { display: none; height: 100%; }
+body[data-kind="voice"] .voice { display: block; }
+body[data-kind="game"] .game { display: flex; }
+.x { all: unset; position: absolute; top: 8px; right: 9px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 5px;
+     color: #b5bac1; font-size: 12px; cursor: pointer; }
+.x:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+.avatar { flex: none; object-fit: cover; background: #3f4248; }
+.txt { min-width: 0; flex: 1; }
+.txt div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 通話: Discord の通知に似せる */
+body[data-kind="voice"] .card { background: #2b2d31; border: 1px solid #3f4147; }
+.voice .head { display: flex; align-items: center; gap: 8px; padding: 10px 40px 0 14px; height: 32px; }
+.gicon { width: 18px; height: 18px; border-radius: 5px; object-fit: cover; flex: none; }
+.gicon[hidden] { display: none; }
+.gname { font-size: 13px; color: #dbdee1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.voice .body { display: flex; align-items: center; gap: 14px; padding: 8px 16px 12px; }
+.avatar.round { width: 52px; height: 52px; border-radius: 50%; }
+.voice .name { font-size: 15px; font-weight: 600; color: #f2f3f5; }
+.voice .line { font-size: 13px; color: #b5bac1; margin-top: 2px; }
+
+/* ゲーム: Steam のフレンドの通知に似せる(単色の背景) */
+body[data-kind="game"] .card { background: #1e252e; border-left: 3px solid #90ba3c; }
+.game { align-items: center; gap: 12px; padding: 0 34px 0 12px; }
+.avatar.sq { width: 48px; height: 48px; border-radius: 4px; }
+.game .name { font-size: 14px; font-weight: 600; color: #e7f0f9; }
+.game .playing { font-size: 12px; color: #8f98a0; }
+.game .title { font-size: 13px; font-weight: 600; color: #a4d007; }
+.game .x { top: 50%; transform: translateY(-50%); }
+
+@media (prefers-reduced-motion: reduce) { .card { transition: none; transform: none; } }

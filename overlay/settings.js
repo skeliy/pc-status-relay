@@ -2,7 +2,17 @@
   const ja = new URLSearchParams(location.search).get('lang') === 'ja';
   const TEXT = ja
     ? {
-        title: '歌詞オーバーレイの設定',
+        title: 'Listen Together の設定',
+        notifyTitle: '通知',
+        lyricsTitle: '歌詞',
+        voiceNotify: '通話の通知(Discord の通話に人が入った時)',
+        voiceHelp: 'だれもいない通話に1人目が入った時に、右下に出して音を鳴らします。全画面のゲーム中は音だけ鳴ります。',
+        gameNotify: 'ゲームの通知(友達がゲームを始めた時)',
+        gameHelp: '友達がゲームを起動した時に、右下に小さく出します(音なし)。オンの間は、あなたのゲームも友達に知らせます。Steam のゲームは知らせません。',
+        test: 'テスト',
+        stateWait: 'skeliy があなたを設定するまで、通知は届きません(テストは試せます)。',
+        stateOk: (n) => `${n} として通知を受け取ります。`,
+        stateOff: '中継サーバーに繋がっていません。インターネットの接続を確かめてください。',
         enabled: '歌詞を表示する',
         opacity: '透明度(不透明さ)',
         fontSize: '文字の大きさ',
@@ -20,7 +30,17 @@
         autoStart: 'Windows の起動時に開始する',
       }
     : {
-        title: 'Lyrics Overlay settings',
+        title: 'Listen Together settings',
+        notifyTitle: 'Notifications',
+        lyricsTitle: 'Lyrics',
+        voiceNotify: 'Call notifications (when someone joins a Discord call)',
+        voiceHelp: 'When someone joins an empty call, a small card appears at the bottom right with a sound. During full-screen games, only the sound plays.',
+        gameNotify: 'Game notifications (when a friend starts a game)',
+        gameHelp: 'Shows a small card at the bottom right when a friend starts a game (no sound). While this is on, your games are shared with friends too. Steam games are not shared.',
+        test: 'Test',
+        stateWait: 'Notifications start after skeliy sets you up (you can still try the test).',
+        stateOk: (n) => `Receiving notifications as ${n}.`,
+        stateOff: 'Cannot reach the server. Check your internet connection.',
         enabled: 'Show lyrics',
         opacity: 'Opacity',
         fontSize: 'Text size',
@@ -41,7 +61,19 @@
   document.title = TEXT.title;
   for (const el of document.querySelectorAll('[data-t]')) el.textContent = TEXT[el.dataset.t];
 
-  const { settings, status, displays, moveMode } = await window.settingsApi.get();
+  // 通知
+  const stateEl = document.getElementById('notifyState');
+  const showNotify = (n) => {
+    if (!n) return;
+    const off = n.relay === false;
+    stateEl.textContent = off ? TEXT.stateOff : n.approved ? TEXT.stateOk((n.me && n.me.name) || '?') : TEXT.stateWait;
+    stateEl.className = 'state' + (n.approved && !off ? '' : ' wait');
+  };
+  for (const b of document.querySelectorAll('[data-test]')) b.addEventListener('click', () => window.settingsApi.test(b.dataset.test));
+  setInterval(async () => showNotify(await window.settingsApi.notifyState()), 3000);
+
+  const { settings, status, displays, moveMode, notify } = await window.settingsApi.get();
+  showNotify(notify);
   const statusEl = document.getElementById('status');
   statusEl.textContent = status;
   window.settingsApi.onStatus((s) => (statusEl.textContent = s));
@@ -68,7 +100,7 @@
     });
   }
 
-  for (const key of ['enabled', 'shadow', 'autoStart']) {
+  for (const key of ['enabled', 'shadow', 'autoStart', 'voiceNotify', 'gameNotify']) {
     const input = document.getElementById(key);
     input.checked = settings[key];
     input.addEventListener('change', () => window.settingsApi.set({ [key]: input.checked }));
@@ -101,7 +133,7 @@
       document.getElementById(key).value = next[key];
       document.querySelector(`output[for="${key}"]`).textContent = FORMAT[key](next[key]);
     }
-    for (const key of ['enabled', 'shadow', 'autoStart']) document.getElementById(key).checked = next[key];
+    for (const key of ['enabled', 'shadow', 'autoStart', 'voiceNotify', 'gameNotify']) document.getElementById(key).checked = next[key];
     if (next.displayId != null) select.value = String(next.displayId);
   });
 })();

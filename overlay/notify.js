@@ -1,0 +1,369 @@
+// 通話とゲームの通知(Listen Together アプリの一部)。
+//  - 中継サーバーに「このPCのアプリ」として登録し、通知を待ち続ける(ブラウザを閉じていても動く)
+//  - だれもいなかった Discord の通話に人が入った時: Discord に似た小さな通知を右下に出し、決まった音を鳴らす
+//  - 友達がゲームを起動した時: Steam に似た小さな通知を右下に出す(音なし)
+//  - 自分がゲームを起動した時: 中継サーバーに知らせる(Steam のゲームは知らせない)
+//  - 全画面(専用の全画面)でゲームをしている間は、通知を出さない。通話の通知は音だけ鳴らす。
+//    ボーダーレス(ウィンドウの全画面)の時は、ふつうに出す
+'use strict';
+
+const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { GameWatcher } = require('./games');
+
+const RELAY = (process.env.LISTEN_TOGETHER_RELAY || 'https://pc-status-relay.onrender.com').replace(/\/$/, '');
+const CARD_GAP = 8; // 通知どうしのすき間
+const PAD = 10; // 通知の窓の中の、影のための余白(toast.css の --pad と同じ)
+const MAX_CARDS = 4;
+const SHOW_MS = { voice: 7000, game: 6000 };
+const SIZE = { voice: { width: 380, height: 132 }, game: { width: 320, height: 96 } }; // 影の分の余白を含む
+
+// Windows の状態を2秒ごとに知らせる係は watch.ps1(PowerShell)。
+//  q: 通知を出してよいか(SHQueryUserNotificationState。3 = 専用の全画面のゲーム、1 = 画面ロックなど)。調べられない時は -1
+//  p: 動いているプログラムの一覧 [番号, 名前, 場所]
+
+function createNotifier({ app, BrowserWindow, screen, ipcMain, getSettings, appLang, dir, testMode }) {
+  const statePath = () => path.join(app.getPath('userData'), 'companion.json');
+  let me = { id: null, key: null, discordId: null, sig: null, me: null, label: '', lang: '' };
+  let relayOk = null; // null = まだ分からない / true / false
+  let approved = false;
+  let since = 0;
+  let quns = -1; // Windows が今、通知を受け付ける状態か
+  let checkWorks = false; // 全画面かどうかを調べられるか
+  let cards = []; // { win, kind, height }
+  let soundWin = null;
+  let helper = null;
+  let sentLabel = null;
+
+  const lang = () => (me.lang === 'ja' || me.lang === 'en' ? me.lang : appLang());
+  const T = (j, e) => (lang() === 'ja' ? j : e);
+  const active = () => {
+    const s = getSettings();
+    return !!(s.voiceNotify || s.gameNotify);
+  };
+
+  // ---- 覚えておくこと(中継サーバーでの番号・だれに割り当てられたか) ----
+  function load() {
+    try {
+      me = Object.assign(me, JSON.parse(fs.readFileSync(statePath(), 'utf8')));
+    } catch (e) {}
+    approved = !!me.discordId;
+  }
+  function save() {
+    try {
+      fs.mkdirSync(path.dirname(statePath()), { recursive: true });
+      fs.writeFileSync(statePath(), JSON.stringify(me, null, 2));
+    } catch (e) {}
+  }
+
+  // ---- 中継サーバー ----
+  async function call(method, p, body) {
+    const res = await fetch(RELAY + p, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(method === 'GET' ? 40000 : 15000),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
+
+  async function hello() {
+    const label = me.label || os.userInfo().username || 'PC';
+    const r = await call('POST', '/api/companion/hello', { id: me.id, key: me.key, label, lang: lang(), discordId: me.discordId, sig: me.sig });
+    if (r.status === 403 && r.data.error === 'bad-key') {
+      me.id = me.key = null; // 番号が使えなくなっていたら、新しく登録し直す
+      return hello();
+    }
+    if (r.status !== 200 || !r.data.id) throw new Error('hello ' + r.status);
+    me.id = r.data.id;
+    me.key = r.data.key;
+    if (r.data.approved) {
+      me.discordId = r.data.discordId;
+      me.sig = r.data.sig;
+      me.me = r.data.me || me.me;
+    }
+    approved = !!r.data.approved;
+    if (r.data.id !== me.lastId) since = 0; // 新しく登録し直した時だけ、受信箱を最初から読む
+    me.lastId = r.data.id;
+    sentLabel = label;
+    save();
+    relayOk = true;
+  }
+
+  async function loop() {
+    let needHello = true;
+    const startedAt = Date.now();
+    for (;;) {
+      if (!active()) {
+        await sleep(3000);
+        continue;
+      }
+      // はじめて登録する時は、拡張機能から名前が届くのを少し待つ(skeliy に届く知らせに、分かる名前を出すため)
+      if (!me.id && !me.label && Date.now() - startedAt < 60000) {
+        await sleep(1000);
+        continue;
+      }
+      try {
+        if (needHello) {
+          await hello();
+          needHello = false;
+        }
+        const r = await call('GET', `/api/companion/poll?id=${encodeURIComponent(me.id)}&key=${encodeURIComponent(me.key)}&since=${since}`);
+        if (r.status === 401) {
+          needHello = true; // 中継サーバーが再起動して、こちらを忘れた
+          continue;
+        }
+        if (r.status !== 200) throw new Error('poll ' + r.status);
+        relayOk = true;
+        if (r.data.seq < since) since = 0;
+        else since = r.data.seq;
+        for (const m of r.data.messages || []) handle(m);
+      } catch (e) {
+        relayOk = false;
+        needHello = true;
+        await sleep(5000);
+      }
+    }
+  }
+
+  function handle(m) {
+    const s = getSettings();
+    if (m.type === 'assigned') {
+      me.discordId = m.discordId || null;
+      me.sig = m.sig || null;
+      me.me = m.me || null;
+      approved = !!me.discordId;
+      save();
+    } else if (m.type === 'voice' && s.voiceNotify) {
+      if (Date.now() - (m.at || Date.now()) > 60000) return; // 古すぎるお知らせは出さない
+      notifyVoice(m);
+    } else if (m.type === 'game' && s.gameNotify) {
+      if (Date.now() - (m.at || Date.now()) > 60000) return;
+      notifyGame(m);
+    }
+  }
+
+  async function reportGame(game) {
+    const s = getSettings();
+    if (!s.gameNotify || !approved || !me.id) return; // ゲームの通知を切っている人は、自分のゲームも知らせない
+    try {
+      await call('POST', '/api/companion/game', { id: me.id, key: me.key, game });
+    } catch (e) {}
+  }
+
+  // ---- 全画面かどうか ----
+  // 専用の全画面(3)・画面ロック(1)の時は、通知を出さない。
+  // 調べられない PC では、ゲームが動いている間は全画面だとみなす(ゲームの邪魔をしないため)
+  function blocked() {
+    if (quns === 3 || quns === 1) return true;
+    if (!checkWorks) return games.playing.size > 0;
+    return false;
+  }
+
+  const games = new GameWatcher({ onStart: (g) => reportGame(g) });
+
+  function startHelper() {
+    const fake = process.env.LISTEN_TOGETHER_WATCH_CMD; // テストで使う
+    if (!fake && process.platform !== 'win32') return;
+    const child = fake
+      ? spawn('node', [fake], { stdio: ['ignore', 'pipe', 'ignore'] })
+      : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', path.join(dir, 'watch.ps1')], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    helper = child;
+    let buf = '';
+    child.stdout.on('data', (d) => {
+      buf += d.toString('utf8');
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        try {
+          const j = JSON.parse(line);
+          quns = Number.isFinite(j.q) ? j.q : -1;
+          if (quns > 0) checkWorks = true;
+          if (j.full !== false && Array.isArray(j.p)) games.update(j.p);
+        } catch (e) {}
+      }
+    });
+    child.on('exit', () => {
+      helper = null;
+      setTimeout(startHelper, 10000); // 止まったら少し待って起動し直す
+    });
+  }
+
+  // ---- 音 ----
+  function ensureSound() {
+    if (soundWin && !soundWin.isDestroyed()) return soundWin;
+    soundWin = new BrowserWindow({ show: false, width: 10, height: 10, skipTaskbar: true, webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } });
+    soundWin.loadFile(path.join(dir, 'sound.html'));
+    soundWin.on('closed', () => (soundWin = null));
+    return soundWin;
+  }
+  function playSound() {
+    const w = ensureSound();
+    const go = () => w.webContents.executeJavaScript('window.play && window.play()').catch(() => {});
+    if (w.webContents.isLoading()) w.webContents.once('did-finish-load', go);
+    else go();
+  }
+
+  // ---- 右下の通知 ----
+  function layout() {
+    const area = screen.getPrimaryDisplay().workArea;
+    let bottom = area.y + area.height - 12 + PAD; // 見える通知の下端が、画面の下から 12px になるように
+    for (const c of cards) {
+      const size = SIZE[c.kind];
+      const y = bottom - size.height;
+      if (!c.win.isDestroyed()) c.win.setBounds({ x: area.x + area.width - size.width - 12 + PAD, y, width: size.width, height: size.height });
+      bottom = y + 2 * PAD - CARD_GAP; // 影の余白の分だけ重ねて、見えるすき間を CARD_GAP にする
+    }
+  }
+
+  function closeCard(card) {
+    clearTimeout(card.timer);
+    cards = cards.filter((c) => c !== card);
+    if (!card.win.isDestroyed()) card.win.destroy();
+    layout();
+  }
+
+  function showCard(kind, data) {
+    while (cards.length >= MAX_CARDS) closeCard(cards[0]);
+    const size = SIZE[kind];
+    const win = new BrowserWindow({
+      ...size,
+      show: false,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      alwaysOnTop: true,
+      webPreferences: { preload: path.join(dir, 'toast_preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    win.setAlwaysOnTop(true, 'screen-saver');
+    const card = { win, kind, timer: null };
+    cards.unshift(card); // 新しいものを一番下に
+    layout();
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.webContents.on('will-navigate', (e) => e.preventDefault());
+    win.loadFile(path.join(dir, 'toast.html'), { query: { kind, lang: lang() } });
+    win.webContents.once('did-finish-load', () => {
+      if (win.isDestroyed()) return;
+      win.webContents.send('toast-data', data);
+      win.showInactive(); // 今使っている画面からフォーカスを奪わない
+      win.setAlwaysOnTop(true, 'screen-saver');
+    });
+    const arm = () => {
+      clearTimeout(card.timer);
+      card.timer = setTimeout(() => {
+        if (!win.isDestroyed()) win.webContents.send('toast-leave');
+        setTimeout(() => closeCard(card), 260);
+      }, SHOW_MS[kind]);
+    };
+    card.arm = arm;
+    arm();
+    return card;
+  }
+
+  const findCard = (sender) => cards.find((c) => !c.win.isDestroyed() && c.win.webContents === sender);
+  ipcMain.on('toast-hold', (e, hold) => {
+    const c = findCard(e.sender);
+    if (!c) return;
+    if (hold) clearTimeout(c.timer);
+    else c.arm();
+  });
+  ipcMain.on('toast-close', (e) => {
+    const c = findCard(e.sender);
+    if (c) closeCard(c);
+  });
+
+  function notifyVoice(m) {
+    playSound(); // 全画面の時も、音だけは鳴らす
+    if (blocked()) return;
+    showCard('voice', {
+      guildName: (m.guild && m.guild.name) || 'Discord',
+      guildIcon: (m.guild && m.guild.icon) || null,
+      name: (m.user && m.user.name) || '?',
+      avatar: (m.user && m.user.avatar) || null,
+      text: T(`${(m.channel && m.channel.name) || ''} の通話に参加しました`, `joined the call in ${(m.channel && m.channel.name) || ''}`),
+    });
+  }
+
+  function notifyGame(m) {
+    if (blocked()) return; // ゲームの通知は音なし。全画面の時は何もしない
+    showCard('game', {
+      name: (m.user && m.user.name) || '?',
+      avatar: (m.user && m.user.avatar) || null,
+      playing: T('プレイ中', 'is playing'),
+      game: m.game || '',
+    });
+  }
+
+  // ---- 外から使うもの ----
+  function start() {
+    load();
+    if (!testMode || process.env.LISTEN_TOGETHER_RELAY) loop();
+    startHelper();
+  }
+
+  function setProfile({ label, lang: l }) {
+    let changed = false;
+    if (typeof label === 'string' && label.trim() && label.trim().slice(0, 40) !== me.label) {
+      me.label = label.trim().slice(0, 40);
+      changed = true;
+    }
+    if ((l === 'ja' || l === 'en') && l !== me.lang) {
+      me.lang = l;
+      changed = true;
+    }
+    if (changed) save();
+    // 名前が変わったら、中継サーバーにも伝える(割り当てのページに新しい名前で出るように)
+    if (me.id && me.label && sentLabel !== null && me.label !== sentLabel) hello().catch(() => {});
+  }
+
+  function test(kind) {
+    const who = me.me || { name: me.label || T('あなた', 'You'), avatar: null };
+    if (kind === 'game') {
+      notifyGameForce({ user: who, game: 'VALORANT' });
+    } else {
+      playSound();
+      showCard('voice', {
+        guildName: T('テスト', 'Test'),
+        guildIcon: null,
+        name: who.name,
+        avatar: who.avatar,
+        text: T('General の通話に参加しました', 'joined the call in General'),
+      });
+    }
+  }
+  function notifyGameForce(m) {
+    showCard('game', { name: m.user.name, avatar: m.user.avatar, playing: T('プレイ中', 'is playing'), game: m.game });
+  }
+
+  function state() {
+    return {
+      voice: !!getSettings().voiceNotify,
+      game: !!getSettings().gameNotify,
+      registered: !!me.id,
+      approved,
+      me: me.me || null,
+      relay: relayOk,
+      fullscreenCheck: checkWorks,
+      showing: cards.length,
+    };
+  }
+
+  return { start, setProfile, test, state, _debug: { handle, blocked, games, setQuns: (q, works) => ((quns = q), (checkWorks = works)), cards: () => cards } };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+module.exports = { createNotifier };

@@ -6,6 +6,16 @@ overlay.html
 overlay.css
 overlay.js
 lyrics_core.js
+notify.js
+games.js
+toast.html
+toast.css
+toast.js
+toast_preload.js
+sound.html
+sound.js
+watch.ps1
+assets/discord-notification.mp3
 settings.html
 settings.css
 settings.js

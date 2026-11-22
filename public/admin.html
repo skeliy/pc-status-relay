@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>アプリの割り当て</title>
+<style>
+:root{--bg:#ffffff;--card:#f6f7f9;--ink:#1f1f1f;--muted:#6b7177;--line:#e3e6ea;--accent:#5865f2;--ok:#1e9e57;--warn:#c77700;--on-accent:#fff;color-scheme:light}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111317;--card:#1a1d22;--ink:#e8eaed;--muted:#9aa0a6;--line:#2b2f35;--accent:#8891f7;--ok:#3ddc84;--warn:#f5b301;--on-accent:#0b1220;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#111317;--card:#1a1d22;--ink:#e8eaed;--muted:#9aa0a6;--line:#2b2f35;--accent:#8891f7;--ok:#3ddc84;--warn:#f5b301;--on-accent:#0b1220;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:720px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:4px 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.who{flex:1;min-width:160px}
+.who b{font-size:15px}
+.meta{color:var(--muted);font-size:12px}
+.tag{font-size:11px;border-radius:99px;padding:1px 8px;border:1px solid currentColor;margin-left:6px;vertical-align:1px}
+.tag.ok{color:var(--ok)} .tag.wait{color:var(--warn)}
+select,input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;max-width:100%}
+select{min-width:200px}
+button{font:inherit;border:0;border-radius:8px;padding:7px 14px;background:var(--accent);color:var(--on-accent);font-weight:700;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+.me{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px}
+.me img{width:22px;height:22px;border-radius:50%}
+.empty{color:var(--muted);padding:18px 4px}
+.status{font-size:12px;color:var(--muted)}
+.status.bad{color:#e5484d}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Listen Together アプリの割り当て</h1>
+  <div class="sub">アプリを入れた人が、Discord のだれなのかを選びます。選ぶまで、その人には通話とゲームの通知が届きません。</div>
+  <div id="login" class="card" hidden>
+    <div class="row"><input id="tok" type="password" placeholder="持ち主用のトークン(OWNER_TOKEN)" style="flex:1"><button id="go">開く</button></div>
+    <div class="meta">このブラウザに覚えておくので、次からは入れなくて大丈夫です。</div>
+  </div>
+  <div id="status" class="status"></div>
+  <div id="list"></div>
+</div>
+<script>
+(function(){
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k){ try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k,v){ try { localStorage.setItem(k,v); } catch (e) {} } };
+let token = new URLSearchParams(location.search).get('token') || store.get('owner-token') || '';
+if (new URLSearchParams(location.search).get('token')) { store.set('owner-token', token); history.replaceState(null, '', location.pathname); }
+const ago = (t) => { const s = Math.round((Date.now()-t)/1000); return s < 90 ? 'いま接続中' : s < 3600 ? Math.round(s/60)+'分前' : s < 86400 ? Math.round(s/3600)+'時間前' : Math.round(s/86400)+'日前'; };
+const STATUS = { ready: 'Discord に接続しています', connecting: 'Discord に接続しています…', reconnecting: 'Discord に繋ぎ直しています…', 'no-token': 'Render に DISCORD_BOT_TOKEN が設定されていません(通話の通知は動きません)', 'bad-token': 'DISCORD_BOT_TOKEN が正しくありません', 'no-websocket': 'サーバーの Node.js が古すぎます(22 以上が必要)' };
+async function api(path, body){
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: Object.assign({ Authorization: 'Bearer ' + token }, body ? { 'Content-Type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 404) throw new Error('auth');
+  return r.json();
+}
+async function load(){
+  if (!token) { $('login').hidden = false; return; }
+  let d;
+  try { d = await api('/api/admin/companions'); } catch (e) { $('login').hidden = false; $('status').textContent = e.message === 'auth' ? 'トークンが違います' : '読み込めませんでした'; return; }
+  $('login').hidden = true;
+  $('status').textContent = (STATUS[d.discord.status] || d.discord.status) + (d.discord.guild ? '(' + d.discord.guild + ')' : '');
+  $('status').className = 'status' + (d.discord.status === 'ready' ? '' : ' bad');
+  if (!d.companions.length) { $('list').innerHTML = '<div class="empty">まだだれもアプリを入れていません(入れた人のアプリが起動していると、ここに出ます)。</div>'; return; }
+  $('list').innerHTML = d.companions.map((c) => {
+    const opts = '<option value="">(選ばない)</option>' + d.members.map((m) => '<option value="'+esc(m.id)+'"'+(c.member && c.member.id===m.id?' selected':'')+'>'+esc(m.name)+(m.username && m.username!==m.name?' (@'+esc(m.username)+')':'')+'</option>').join('');
+    return '<div class="card"><div class="row"><div class="who"><b>'+esc(c.label)+'</b>'+(c.member?'<span class="tag ok">割り当て済み</span>':'<span class="tag wait">まだ</span>')+
+      '<div class="meta">'+ago(c.lastSeen)+' ・ '+(c.lang==='ja'?'日本語':'English')+'</div>'+
+      (c.member?'<div class="me"><img src="'+esc(c.member.avatar)+'" alt="">'+esc(c.member.name)+'</div>':'')+'</div>'+
+      '<select data-c="'+esc(c.id)+'" aria-label="'+esc(c.label)+' の Discord のアカウント">'+opts+'</select><button data-save="'+esc(c.id)+'">保存</button></div></div>';
+  }).join('');
+  document.querySelectorAll('[data-save]').forEach((b) => b.onclick = async () => {
+    const sel = document.querySelector('select[data-c="'+b.dataset.save+'"]');
+    b.disabled = true; b.textContent = '保存中…';
+    try { await api('/api/admin/assign', { companion: b.dataset.save, discordId: sel.value || null }); b.textContent = '保存しました'; setTimeout(load, 700); }
+    catch (e) { b.textContent = '失敗しました'; b.disabled = false; }
+  });
+}
+$('go').onclick = () => { token = $('tok').value.trim(); store.set('owner-token', token); load(); };
+load();
+})();
+</script>
+</body>
+</html>

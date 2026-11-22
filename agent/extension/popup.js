@@ -118,20 +118,26 @@
       ]);
     }
 
-    // まだ入っていない人には、はじめに一度だけ確認を出す(Apple Music と Spotify 以外を使っている人には、スイッチを押すまで出さない)
+    // まだ入っていない人には、確認を出す(「今はしない」を押した人にも、小さな「入れる」ボタンをいつも出しておく)
     if (!lyr.installed) {
-      const service = data.client && data.client.service;
-      if (lyricsAsking === null) lyricsAsking = lyr.askFirst && (!service || service === 'apple' || service === 'spotify');
+      if (lyricsAsking === null) lyricsAsking = lyr.askFirst;
       if (lyricsAsking) {
         return section(null, [
-          el('div', { class: 'name', text: T('lyricsAskTitle') }),
-          el('div', { class: 'muted small', text: T('lyricsAskBody') }),
+          el('div', { class: 'name', text: T('appAskTitle') }),
+          el('ul', { class: 'feat muted small' }, [el('li', { text: T('appFeatVoice') }), el('li', { text: T('appFeatGame') }), el('li', { text: T('appFeatLyrics') })]),
+          el('div', { class: 'muted small', text: T('appAskBody') }),
           el('div', { class: 'row' }, [
             el('button', { class: 'primary', text: T('lyricsYes'), onclick: () => send({ type: 'lyrics-guide', mode: 'install' }) }),
             el('button', { text: T('lyricsNo'), onclick: async () => { lyricsAsking = false; await send({ type: 'lyrics-dismiss' }); refresh(true); } }),
           ]),
         ]);
       }
+      return section(null, [
+        el('div', { class: 'switch-row' }, [
+          el('div', { class: 'grow' }, [el('div', { class: 'name', text: T('appName') }), el('div', { class: 'muted small', text: T('appShort') })]),
+          el('button', { class: 'primary', text: T('appInstall'), onclick: () => send({ type: 'lyrics-guide', mode: 'install' }) }),
+        ]),
+      ]);
     }
 
     const sw = el('button', {
@@ -171,6 +177,45 @@
       controls.unshift(gear);
     }
     return section(null, [titleRow(lyr.installed && !lyr.running ? T('lyricsNotRunning') : null, controls)]);
+  }
+
+  // 通話・ゲームの通知(アプリが動いている時)
+  let notifyGuideOpen = false;
+  function notifySection(lyr) {
+    const n = lyr.notify;
+    if (lyr.notifyOld) return section(T('notifyTitle'), [el('div', { class: 'muted small', text: T('notifyUpdating') })]);
+    const row = (key, label, help, on, kind) => {
+      const sw = el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-label': label });
+      sw.addEventListener('click', async () => {
+        const next = sw.getAttribute('aria-checked') !== 'true';
+        sw.setAttribute('aria-checked', String(next));
+        if (key === 'voice' && next && !lyr.notifyGuideSeen) notifyGuideOpen = true; // はじめてオンにした時は案内を出す
+        await send({ type: 'notify-set', [key]: next });
+        refresh(true);
+      });
+      const test = el('button', { class: 'small-btn', type: 'button', text: T('notifyTest'), onclick: () => send({ type: 'notify-test', kind }) });
+      return el('div', { class: 'nrow' }, [
+        el('div', { class: 'switch-row' }, [el('div', { class: 'grow' }, [el('div', { class: 'name', text: label }), el('div', { class: 'muted small', text: help })]), test, sw]),
+      ]);
+    };
+    const parts = [];
+    let state = n.relay === false ? T('notifyOffline') : n.approved ? T('notifyApproved', (n.me && n.me.name) || '?') : T('notifyWaiting');
+    parts.push(el('div', { class: 'muted small' + (n.approved && n.relay !== false ? '' : ' warn'), text: state }));
+    parts.push(row('voice', T('notifyVoice'), T('notifyVoiceHelp'), n.voice, 'voice'));
+    if (notifyGuideOpen) {
+      parts.push(
+        el('div', { class: 'guide' }, [
+          el('div', { class: 'name', text: T('notifyGuideTitle') }),
+          el('ul', { class: 'feat small' }, [el('li', { text: T('notifyGuide1') }), el('li', { text: T('notifyGuide2') }), el('li', { text: T('notifyGuide3') })]),
+          el('div', { class: 'row' }, [
+            el('button', { class: 'primary', text: T('notifyTryTest'), onclick: () => send({ type: 'notify-test', kind: 'voice' }) }),
+            el('button', { text: T('notifyGuideOk'), onclick: async () => { notifyGuideOpen = false; await send({ type: 'notify-guide-seen' }); refresh(true); } }),
+          ]),
+        ])
+      );
+    }
+    parts.push(row('game', T('notifyGame'), T('notifyGameHelp'), n.game, 'game'));
+    return section(T('notifyTitle'), parts);
   }
 
   function render(data) {
@@ -314,7 +359,10 @@
     }
 
     // 歌詞オーバーレイ
-    if (data.lyrics && data.lyrics.supported) app.appendChild(lyricsSection(data));
+    if (data.lyrics && data.lyrics.supported) {
+      if (data.lyrics.running && (data.lyrics.notify || data.lyrics.notifyOld)) app.appendChild(notifySection(data.lyrics));
+      app.appendChild(lyricsSection(data));
+    }
 
     // 自分の名前とサービス。同じPCでエージェントが動いていても、ブラウザのプロフィールごとに変えられるようにする
     const name = el('input', { type: 'text', maxlength: '40', value: (data.client && data.client.label) || '' });

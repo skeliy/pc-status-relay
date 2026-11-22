@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src https://cdn.discordapp.com data:; font-src 'self'">
+<link rel="stylesheet" href="toast.css">
+</head>
+<body>
+<div class="card" id="card" role="status" aria-live="polite">
+  <!-- 通話の通知(Discord に似せた形) -->
+  <div class="voice">
+    <div class="head"><img class="gicon" id="gicon" alt=""><span class="gname" id="gname"></span><button class="x" id="x1" type="button" aria-label="Close">✕</button></div>
+    <div class="body"><img class="avatar round" id="avatar1" alt=""><div class="txt"><div class="name" id="name1"></div><div class="line" id="line1"></div></div></div>
+  </div>
+  <!-- ゲームの通知(Steam に似せた形) -->
+  <div class="game">
+    <img class="avatar sq" id="avatar2" alt="">
+    <div class="txt"><div class="name" id="name2"></div><div class="playing" id="playing"></div><div class="title" id="gameTitle"></div></div>
+    <button class="x" id="x2" type="button" aria-label="Close">✕</button>
+  </div>
+</div>
+<script src="toast.js"></script>
+</body>
+</html>

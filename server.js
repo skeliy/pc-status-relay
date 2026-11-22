@@ -51,6 +51,8 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const rooms = require('./rooms');
+// Listen Together アプリ(通話・ゲームの通知)と、Discord の通話の見張り
+const companions = require('./companions');
 
 const PORT = process.env.PORT || 3000;
 const WRITE_TOKEN = process.env.WRITE_TOKEN || '';
@@ -772,6 +774,12 @@ const server = http.createServer((req, res) => {
   }
 
   // 曲の共有の「部屋」と、Discord から来た人用の参加ページ(rooms.js)
+  const sendFile = (r, name) =>
+    fs.readFile(path.join(__dirname, 'public', name), 'utf8', (err, html) => (err ? sendPlain(r, 500, 'not found') : sendHtml(r, 200, html)));
+  if (companions.handle(req, res, parsedUrl, { sendJson, sendHtml, sendPlain, readJsonBody, isOwnerAuthorized, sendFile })) {
+    return;
+  }
+
   if (rooms.handle(req, res, parsedUrl, { sendJson, sendHtml, sendPlain, readJsonBody, isWriteAuthorized })) {
     return;
   }
@@ -791,4 +799,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`PC status relay server listening on port ${PORT}`);
+  companions.start();
 });

@@ -1250,7 +1250,12 @@ async function lyricsSwitchState() {
   if (state && state.ok) {
     await chrome.storage.local.set({ overlaySeen: true });
     await chrome.storage.local.remove('lyricsInstallAt');
-    return { supported: true, installed: true, running: true, enabled: !!state.enabled };
+    // アプリに、この人の名前と画面の言語を伝える(通知の言葉と、skeliy が割り当てる時の名前に使う)
+    const label = (client && client.label) || (agent.data && agent.data.label) || '';
+    overlayPost('/profile', { label, lang });
+    const notify = state.features && state.features.includes('notify') ? state.notify || null : null;
+    const seen = await chrome.storage.local.get('notifyGuideSeen');
+    return { supported: true, installed: true, running: true, enabled: !!state.enabled, notify, notifyOld: !notify, notifyGuideSeen: !!seen.notifyGuideSeen };
   }
   const stored = await chrome.storage.local.get(['overlaySeen', 'lyricsInstallAt', 'lyricsPromptDismissed']);
   return {
@@ -1284,6 +1289,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'lyrics-install-cancel') work = chrome.storage.local.remove('lyricsInstallAt').then(() => ({ ok: true }));
   else if (message.type === 'lyrics-dismiss') work = chrome.storage.local.set({ lyricsPromptDismissed: true }).then(() => ({ ok: true }));
   else if (message.type === 'lyrics-set-enabled') work = overlayPost('/settings', { enabled: !!message.enabled }, true).then((d) => d || { ok: false });
+  else if (message.type === 'notify-set') {
+    const patch = {};
+    if (typeof message.voice === 'boolean') patch.voiceNotify = message.voice;
+    if (typeof message.game === 'boolean') patch.gameNotify = message.game;
+    work = overlayPost('/settings', patch, true).then((d) => d || { ok: false });
+  } else if (message.type === 'notify-test') work = overlayPost('/notify-test', { kind: message.kind === 'game' ? 'game' : 'voice' }, true).then((d) => d || { ok: false });
+  else if (message.type === 'notify-guide-seen') work = chrome.storage.local.set({ notifyGuideSeen: true }).then(() => ({ ok: true }));
   else if (message.type === 'lyrics-tick' && sender.tab) {
     // Apple Music と Spotify の両方が開いている時は、今聴いているほう(一緒に聴く時と同じタブ)だけを送る
     const p = primaryTab();
@@ -1311,6 +1323,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // 通知のボタン(参加する / 断る)と、通知そのものを押した時
 chrome.notifications.onButtonClicked.addListener(async (id, index) => {
+  if (id === APP_PROMPT_ID) {
+    chrome.notifications.clear(id);
+    if (index === 0) openLyricsGuide('install');
+    return;
+  }
   if (!id.startsWith('invite:')) return;
   await loadAll();
   const code = id.slice('invite:'.length);
@@ -1318,15 +1335,48 @@ chrome.notifications.onButtonClicked.addListener(async (id, index) => {
   else await declineInvite(code);
 });
 chrome.notifications.onClicked.addListener(async (id) => {
+  if (id === APP_PROMPT_ID) {
+    chrome.notifications.clear(id);
+    openLyricsGuide('install');
+    return;
+  }
   if (!id.startsWith('invite:')) return;
   await loadAll();
   await acceptInvite(id.slice('invite:'.length));
 });
 
+// ---- アプリ(通話・ゲームの通知と歌詞)を入れるかを、はじめに一度だけ聞く ----
+// 通知を見逃しても、拡張機能のアイコンを押した画面からいつでも入れられる
+const APP_PROMPT_ID = 'app-install-prompt';
+async function askAppOnce() {
+  try {
+    const platform = await chrome.runtime.getPlatformInfo();
+    if (platform.os !== 'win') return; // アプリは今のところ Windows だけ
+    const st = await chrome.storage.local.get(['appPromptShown', 'overlaySeen']);
+    if (st.appPromptShown) return;
+    const running = await overlayPost('/state', {}, true);
+    await chrome.storage.local.set({ appPromptShown: true });
+    if (st.overlaySeen || (running && running.ok)) return; // もう入っている
+    await loadAll();
+    chrome.notifications.create(APP_PROMPT_ID, {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: PcsI18n.t(lang, 'appAskTitle'),
+      message: PcsI18n.t(lang, 'appAskNotif'),
+      buttons: [{ title: PcsI18n.t(lang, 'lyricsYes') }, { title: PcsI18n.t(lang, 'lyricsNo') }],
+      requireInteraction: true,
+      priority: 1,
+    });
+  } catch (e) {
+    log('アプリの案内を出せませんでした', String(e));
+  }
+}
+
 // 画面に出ないページを、ブラウザの起動時や、裏方が起こされた時に用意しておく
 chrome.runtime.onStartup.addListener(() => {
   ensureOffscreen();
   loadAll();
+  setTimeout(askAppOnce, 5000);
 });
 chrome.alarms.create('keep-offscreen', { periodInMinutes: 1 });
 // 一時停止したまま裏に回したタブは、ブラウザが1分に1回くらいしか動かさなくなる。
@@ -1364,6 +1414,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // (タブを再読み込みすると曲が止まってしまうので、再読み込みはしない)
 chrome.runtime.onInstalled.addListener(async () => {
   ensureOffscreen();
+  setTimeout(askAppOnce, 5000);
   for (const site of SITE_SCRIPTS) {
     const list = await chrome.tabs.query({ url: site.match });
     for (const tab of list) {
