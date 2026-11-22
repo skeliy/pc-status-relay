@@ -4,9 +4,13 @@
 # %LOCALAPPDATA%\ListenTogether の中身を新しくする(前の版で ListenTogether\extension に入れた人は、そちらを新しくする)。
 # 拡張機能は中身が新しくなったことに自分で気付いて、読み込み直す。
 #
-# Windows のタスクスケジューラから2時間ごとに
-#   irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/listen-update.ps1 | iex
-# の形で実行される(このファイル自体も GitHub から毎回取ってくるので、更新係の直しも自動で届く)。
+# このファイルは %LOCALAPPDATA%\ListenTogether-updater\update.ps1 に保存され、タスクスケジューラから2時間ごとに
+#   powershell.exe -File "%LOCALAPPDATA%\ListenTogether-updater\update.ps1"
+# の形で実行される。実行のたびに GitHub の新しい版で自分のファイルを置き換えるので、更新係の直しも次から届く。
+# (前は「irm … | iex」で毎回ネットから取って直接実行していたが、Windows Defender にウイルスと間違われるのでやめた)
+# Listen Together アプリが入っている PC では、アプリが拡張機能を更新するので、このタスクは使わない。
+#
+# 引数 install-app: 拡張機能の「インストール」ボタンから呼ばれた時。歌詞アプリ(Listen Together アプリ)を入れる。
 # スマートアプリコントロールなどで「制限付きの言語モード」になっていても動くよう、
 # .NET を直接呼ばず、普通のコマンドだけで書いている。
 
@@ -23,6 +27,10 @@ function Update-ListenTogether {
     if (Test-Path (Join-Path $legacy 'manifest.json')) { $ext = $legacy } # 前の版の入れ方(ブラウザはこちらを読み込んでいる)
     $tmp = Join-Path $env:LOCALAPPDATA 'ListenTogether-download'
     $log = Join-Path $root 'update.log'
+    $updDir = Join-Path $env:LOCALAPPDATA 'ListenTogether-updater'
+    $updFile = Join-Path $updDir 'update.ps1'
+    $selfUrl = 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/listen-update.ps1'
+    if ($env:LT_UPDATE_SCRIPT) { $selfUrl = $env:LT_UPDATE_SCRIPT }
 
     # 文字のファイルを取ってくる(サーバーが文字として送ってこなくても読めるよう、いったんファイルに保存して読む)
     function Get-LtText([string]$uri) {
@@ -42,13 +50,44 @@ function Update-ListenTogether {
         } catch {}
     }
 
+    # 自分(この更新係)の新しい版を、次に実行する時のために保存しておく。
+    # 中身がちゃんと更新係のものか確かめてから置き換える(途中で切れたファイルで上書きしない)
+    try {
+        New-Item -ItemType Directory -Force -Path $updDir | Out-Null
+        $newSelf = Join-Path $updDir 'update.ps1.new'
+        Invoke-WebRequest -UseBasicParsing -Uri $selfUrl -OutFile $newSelf
+        $selfText = Get-Content -Raw -Encoding UTF8 -Path $newSelf
+        if ($selfText -and $selfText.Contains('function Update-ListenTogether') -and $selfText.TrimEnd().EndsWith('# end of listen-update.ps1')) {
+            Move-Item -Path $newSelf -Destination $updFile -Force
+        } else {
+            Remove-Item $newSelf -Force
+        }
+    } catch {
+        Write-LtLog ('could not refresh the updater: ' + $_.Exception.Message)
+    }
+
+    # 前の形(ネットから取って直接実行する)のタスクが残っていたら、保存したファイルを実行する形に直す
+    try {
+        if ((Test-Path $updFile) -and (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            $task = Get-ScheduledTask -TaskName 'ListenTogetherUpdater' -ErrorAction SilentlyContinue
+            if ($task -and (($task.Actions | ForEach-Object { $_.Arguments }) -join ' ') -match 'iex') {
+                $taskArgs = '--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $updFile + '"'
+                $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\conhost.exe') -Argument $taskArgs
+                Set-ScheduledTask -TaskName 'ListenTogetherUpdater' -Action $action | Out-Null
+                Write-LtLog 'switched the update task to the saved file'
+            }
+        }
+    } catch {
+        Write-LtLog ('could not switch the update task: ' + $_.Exception.Message)
+    }
+
     # 拡張機能の「インストール」から歌詞アプリを入れられるよう、決まった動きだけをするリンクを登録する。
-    # リンクの中身(%1)はコマンドに渡さない。押されるまで何もインストールしない
+    # リンクの中身(%1)はコマンドに渡さない。押されるまで何もインストールしない。
+    # 押された時は、保存してある更新係を「install-app」で実行する(ネットから取ったものを直接実行しない)
     try {
         $linkKey = 'HKCU:\Software\Classes\lyricsoverlay-setup'
-        $installUrl = 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1'
         $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
-        $linkCommand = '"' + $conhost + '" --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "irm ' + $installUrl + ' | iex"'
+        $linkCommand = '"' + $conhost + '" --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $updFile + '" install-app'
         New-Item -Path "$linkKey\shell\open\command" -Force | Out-Null
         Set-ItemProperty -Path $linkKey -Name '(default)' -Value 'Lyrics Overlay Setup'
         Set-ItemProperty -Path $linkKey -Name 'URL Protocol' -Value ''
@@ -107,4 +146,22 @@ function Update-ListenTogether {
     }
 }
 
-Update-ListenTogether
+# 歌詞アプリ(Listen Together アプリ)を入れる。インストール用のファイルを保存してから、そのファイルを実行する
+function Install-ListenTogetherApp {
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    $updDir = Join-Path $env:LOCALAPPDATA 'ListenTogether-updater'
+    $url = 'https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1'
+    if ($env:LT_APP_INSTALL_SCRIPT) { $url = $env:LT_APP_INSTALL_SCRIPT }
+    New-Item -ItemType Directory -Force -Path $updDir | Out-Null
+    $file = Join-Path $updDir 'lyrics-install.ps1'
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $file
+    & $file
+}
+
+if ($args -contains 'install-app') {
+    Install-ListenTogetherApp
+} else {
+    Update-ListenTogether
+}
+# end of listen-update.ps1

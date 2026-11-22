@@ -7,6 +7,7 @@ overlay.css
 overlay.js
 lyrics_core.js
 notify.js
+extupdate.js
 games.js
 toast.html
 toast.css

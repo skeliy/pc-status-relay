@@ -16,7 +16,7 @@ if (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
         Write-Host 'Automatic updates stopped. / 自動更新を止めました。'
     }
 }
-foreach ($ltOld in @((Join-Path $env:LOCALAPPDATA 'ListenTogether-download'), (Join-Path $env:LOCALAPPDATA 'ListenTogether-setup'))) {
+foreach ($ltOld in @((Join-Path $env:LOCALAPPDATA 'ListenTogether-download'), (Join-Path $env:LOCALAPPDATA 'ListenTogether-setup'), (Join-Path $env:LOCALAPPDATA 'ListenTogether-updater'))) {
     if (Test-Path $ltOld) { Remove-Item $ltOld -Recurse -Force }
 }
 if (Test-Path $ltRoot) {

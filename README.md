@@ -351,9 +351,9 @@ Chrome・Brave・Edge で使えます(Firefox は非対応)。
 
 - **エージェントを動かしているPC**: 拡張機能ページ(`chrome://extensions` など)でデベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」で **agent.py と同じフォルダの中の `extension` フォルダ** を選びます。拡張機能も自動アップデートで新しくなり、自分で読み込み直します。
 - **Discord のリンクから来た人(Windows)**: 参加ページに出るコマンド `irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex` を PowerShell に貼り付けて実行し、表示されたフォルダ(`%LOCALAPPDATA%\ListenTogether`。場所はクリップボードにコピーされる)を同じ手順で読み込みます。
-  - コマンドは、拡張機能を GitHub(このリポジトリの `agent/extension`)からダウンロードし、タスクスケジューラに「ListenTogetherUpdater」というタスクを登録します。このタスクが2時間ごとに `public/listen-update.ps1` を GitHub から取ってきて実行し、新しい版があればフォルダの中身を入れ替えます。拡張機能はそれに気付いて、自分で読み込み直します(一緒に聴いている最中は、終わってから読み込み直します)。管理者の権限はいりません。
+  - コマンドは、拡張機能を GitHub(このリポジトリの `agent/extension`)からダウンロードし、タスクスケジューラに「ListenTogetherUpdater」というタスクを登録します。このタスクは、`%LOCALAPPDATA%\ListenTogether-updater\update.ps1` に保存した更新係(`public/listen-update.ps1`)を2時間ごとに実行し、新しい版があればフォルダの中身を入れ替えます。更新係は実行のたびに自分のファイルも新しい版にします。前は「`irm … | iex`」でネットから取って直接実行していましたが、Windows Defender にトロイの木馬と間違われてブロックされたため、保存したファイルを実行する形に変えました(古い形のタスクは、動けた時に自分で新しい形に直します)。Listen Together アプリが入っている PC では、アプリが2時間ごとに同じ更新係を窓を出さずに実行します。拡張機能はそれに気付いて、自分で読み込み直します(一緒に聴いている最中は、終わってから読み込み直します)。管理者の権限はいりません。
   - やめる時は、拡張機能ページで削除してから `irm https://pc-status-relay.onrender.com/listen-uninstall.ps1 | iex` を実行します(タスクとフォルダが消えます)。
-  - 拡張機能アイコンを押した画面を開くたびに、新しい版があるかを確かめます。あれば画面の上に「新しい版があります」と、今すぐ入れるためのコマンド(Windows: `Start-ScheduledTask -TaskName ListenTogetherUpdater`、Mac: `launchctl kickstart -k gui/$(id -u)/com.skeliy.listentogether.updater`。コピーボタン付き)が出ます。実行して新しい版が入ると、拡張機能が自分で読み込み直します(画面を開いたままでも3秒ごとに確かめます)。
+  - 拡張機能アイコンを押した画面を開くたびに、新しい版があるかを確かめます。あれば画面の上に「新しい版があります」と、今すぐ入れるためのコマンド(Windows: 入れ直しのコマンド `irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex`。更新係のタスクが消されていても直ります。Mac: `launchctl kickstart -k gui/$(id -u)/com.skeliy.listentogether.updater`。コピーボタン付き)が出ます。実行して新しい版が入ると、拡張機能が自分で読み込み直します(画面を開いたままでも3秒ごとに確かめます)。
   - 更新の記録は `%LOCALAPPDATA%\ListenTogether\update.log` に残ります。前の版で `ListenTogether\extension` に入れた人は、そのフォルダが引き続き更新されます。
 - **Discord のリンクから来た人(Mac)**: 参加ページの入れ方の上にある「Mac」のタブを押し、出てくるコマンド `curl -fsSL https://pc-status-relay.onrender.com/listen-install.sh | bash` をターミナルに貼り付けて実行します。拡張機能ページの「パッケージ化されていない拡張機能を読み込む」を押したら、`Cmd+Shift+G` → `Cmd+V` → `Return` → 「選択」で、表示されたフォルダ(`~/Library/Application Support/ListenTogether`。場所はクリップボードにコピーされる)を読み込みます。
   - コマンドは Windows と同じく GitHub から拡張機能をダウンロードし、launchd(Mac の自動実行)に `com.skeliy.listentogether.updater` を登録します。ログインしている間、2時間ごとに `public/listen-update.sh` を GitHub から取ってきて実行し、新しい版があればフォルダの中身を入れ替えます。管理者の権限はいりません。
@@ -390,7 +390,7 @@ Chrome・Brave・Edge で使えます(Firefox は非対応)。
 ブラウザ版の Apple Music・Spotify・YouTube Music・YouTube で流している曲の歌詞を、画面の上に文字だけで表示する別のアプリです(`overlay` フォルダ)。背景は透明で、マウスの操作はすべて下の画面に通り抜けます。
 
 - 入れ方: 拡張機能のアイコンを押すと出る確認で「インストール」を押します。開いた案内のページのとおりにブラウザの確認で「開く」を押すと、裏で Electron(約160MB)をダウンロードして `%LOCALAPPDATA%\LyricsOverlay` に入れ、終わると設定画面が開きます。始まらない時は、同じ場所に出るコマンド `irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1 | iex` を PowerShell で実行します。記録は `%LOCALAPPDATA%\LyricsOverlay-install.log` に残ります。
-- インストールのリンク: `lyricsoverlay-setup://` は、拡張機能の更新係(`listen-update.ps1`)とエージェント(`agent.py`)が登録します。リンクの中身は使わず、決まったインストールだけを実行します。
+- インストールのリンク: `lyricsoverlay-setup://` は、拡張機能の更新係(`listen-update.ps1`)とエージェント(`agent.py`)が登録します。リンクの中身は使わず、決まったインストールだけを実行します。押された時は、保存した更新係を `install-app` 付きで実行し、`lyrics-install.ps1` をファイルに保存してから実行します。
 - 設定: 拡張機能のスイッチの左にある歯車か、通知領域のアイコンから、透明度・文字の大きさ・位置・歌詞のタイミングを変えられます。
 - 更新: アプリが2時間ごとに `overlay/VERSION` を確かめ、新しければ自分で更新します(歌詞を表示している間は更新しません)。ファイルを増やしたら `overlay/FILES` に書き足します。
 - やめる時: `irm https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-uninstall.ps1 | iex`

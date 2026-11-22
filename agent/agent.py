@@ -291,26 +291,62 @@ def build_payload(config, override: StatusOverride, tracker: StatusTracker):
     return payload
 
 
+UPDATER_URL = "https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/listen-update.ps1"
+
+
+def _save_updater_script():
+    """拡張機能の更新係(listen-update.ps1)を %LOCALAPPDATA%\\ListenTogether-updater\\update.ps1 に保存して、その場所を返す。
+    途中で切れたファイルや違う中身は使わない。保存できなければ、前に保存したものを使う。"""
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return None
+    folder = os.path.join(local, "ListenTogether-updater")
+    path = os.path.join(folder, "update.ps1")
+    try:
+        import requests
+
+        r = requests.get(UPDATER_URL, timeout=20)
+        r.raise_for_status()
+        text = r.text
+        if "function Update-ListenTogether" in text and text.rstrip().endswith("# end of listen-update.ps1"):
+            os.makedirs(folder, exist_ok=True)
+            tmp = path + ".new"
+            with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(text)
+            os.replace(tmp, path)
+    except Exception as e:
+        print(f"[歌詞アプリ] 更新係を保存できませんでした: {type(e).__name__}")
+    return path if os.path.exists(path) else None
+
+
 def register_lyrics_install_link():
     """拡張機能の「インストール」から歌詞アプリを入れられるよう、決まった動きだけをするリンクを登録する。
-    リンクの中身はコマンドに渡さない。押されるまで何もインストールしない。"""
-    try:
-        import winreg
+    リンクの中身はコマンドに渡さない。押されるまで何もインストールしない。
+    押された時は、保存した更新係のファイルを「install-app」で実行する。
+    (前は「irm … | iex」でネットから取って直接実行していたが、Windows Defender にウイルスと間違われるのでやめた)"""
 
-        url = "https://raw.githubusercontent.com/skeliy/pc-status-relay/main/public/lyrics-install.ps1"
-        conhost = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "conhost.exe")
-        command = (
-            f'"{conhost}" --headless powershell.exe -NoProfile -NonInteractive '
-            f'-ExecutionPolicy Bypass -Command "irm {url} | iex"'
-        )
-        base = r"Software\Classes\lyricsoverlay-setup"
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Lyrics Overlay Setup")
-            winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + r"\shell\open\command") as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
-    except Exception as e:
-        print(f"[歌詞アプリ] インストール用のリンクを登録できませんでした: {e}")
+    def work():
+        try:
+            import winreg
+
+            script = _save_updater_script()
+            if not script:
+                return
+            conhost = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "conhost.exe")
+            command = (
+                f'"{conhost}" --headless powershell.exe -NoProfile -NonInteractive '
+                f'-ExecutionPolicy Bypass -File "{script}" install-app'
+            )
+            base = r"Software\Classes\lyricsoverlay-setup"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Lyrics Overlay Setup")
+                winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + r"\shell\open\command") as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
+        except Exception as e:
+            print(f"[歌詞アプリ] インストール用のリンクを登録できませんでした: {e}")
+
+    threading.Thread(target=work, name="lyrics-install-link", daemon=True).start()
 
 
 def start_music(config):

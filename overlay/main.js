@@ -11,6 +11,7 @@ const http = require('http');
 const path = require('path');
 const vm = require('vm');
 const { createNotifier } = require('./notify');
+const { createExtUpdater } = require('./extupdate');
 
 const PORT = 8789;
 const LRCLIB = process.env.LYRICS_OVERLAY_LRCLIB_BASE || 'https://lrclib.net';
@@ -702,6 +703,10 @@ if (!TEST_MODE && !app.requestSingleInstanceLock()) {
     }, 5000);
     setTimeout(checkForUpdate, 20000);
     setInterval(checkForUpdate, UPDATE_EVERY_MS);
+    // 拡張機能の更新(Windows Defender に止められる古いタスクの代わり)
+    if (!TEST_MODE && app.isPackaged && process.platform === 'win32') {
+      createExtUpdater({ log: (m) => console.error(m) }).start();
+    }
     if (process.argv.includes('--settings') || wantsSettings(process.argv)) openSettings();
   });
   app.on('window-all-closed', (e) => e.preventDefault());
