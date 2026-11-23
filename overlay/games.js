@@ -9,6 +9,8 @@ const STEAM = /[\\/]steamapps[\\/]/i;
 // 実行ファイル名(小文字・.exe なし) -> ゲームの名前
 const KNOWN = {
   'valorant-win64-shipping': 'VALORANT',
+  'valorant': 'VALORANT', // 起動の最初に少しだけ動くもの。本体と同じ名前にして、2回知らせないようにする
+  'league of legends': 'League of Legends',
   'fortniteclient-win64-shipping': 'Fortnite',
   'fortniteclient-win64-shipping_eac_eos': 'Fortnite',
   'minecraft.windows': 'Minecraft',
@@ -67,7 +69,7 @@ const KNOWN = {
 };
 
 // ゲームのフォルダにあっても、ゲームそのものではないもの
-const NOT_GAME = /(launcher|crash|report|update|helper|service|anticheat|anti-cheat|easyanticheat|battleye|beservice|setup|install|uninst|cefprocess|cefsubprocess|webhelper|overlay|bootstrap|redist|vc_redist|dxsetup|unitycrashhandler|riotclient|vgc|vgtray|epicgames|epicweb|steam|socialclub|rockstar|eadesktop|origin|ubisoftconnect|uplay|battle\.net|agent)/i;
+const NOT_GAME = /(launcher|crash|report|update|helper|service|anticheat|anti-cheat|easyanticheat|battleye|beservice|setup|install|uninst|cefprocess|cefsubprocess|webhelper|overlay|bootstrap|redist|vc_redist|dxsetup|unitycrashhandler|riotclient|leagueclient|vgc|vgtray|epicgames|epicweb|steam|socialclub|rockstar|eadesktop|origin|ubisoftconnect|uplay|battle\.net|agent)/i;
 
 // ゲームが入っている場所(ランチャーごと)。この下のフォルダの名前をゲームの名前に使う
 const STORE_DIRS = [
@@ -117,11 +119,16 @@ function gameOf(name, exePath) {
     const store = STORE_DIRS.map((re) => p.match(re)).find(Boolean);
     return store ? store[1].trim() : null;
   }
+  // 公式の Minecraft ランチャーは「Minecraft Launcher」フォルダの Minecraft.exe(ゲーム本体は javaw か Minecraft.Windows)
+  if (key === 'minecraft' && /minecraft launcher/i.test(p)) return null;
   if (Object.prototype.hasOwnProperty.call(KNOWN, key)) return KNOWN[key];
-  if (NOT_GAME.test(key)) return null;
+  // ランチャーなど。「Riot Client.exe」のように空白が入った名前もあるので、空白などを抜いた形でも確かめる
+  const isNotGame = (t) => NOT_GAME.test(t) || NOT_GAME.test(t.replace(/[\s_.-]+/g, ''));
+  if (isNotGame(key)) return null;
   const shipping = /-(win64|wingdk)-shipping$/i.test(file);
   const store = STORE_DIRS.map((re) => p.match(re)).find(Boolean);
   if (!shipping && !store) return null; // どこのゲームか分からないものは知らせない(普通のアプリを間違えないため)
+  if (store && !shipping && isNotGame(store[1])) return null; // ランチャーのフォルダ(Riot Games\Riot Client など)の中のもの
   return prettyBase(file) || (store ? store[1].trim() : null);
 }
 
