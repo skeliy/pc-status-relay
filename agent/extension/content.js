@@ -191,6 +191,16 @@
       .person.me svg { color: #fa2d48; }
       .pname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .psvc { color: #8f93a6; font-size: 11px; white-space: nowrap; }
+      /* 一緒に聴いている人の一覧が消えた後に残る、小さな「🎧 人数」。カーソルを合わせると一覧がまた出る */
+      .peek { display: flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 999px; cursor: default;
+              background: rgba(32,34,44,.82); border: 1px solid rgba(255,255,255,.12); color: rgba(255,255,255,.85);
+              font-size: 12px; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.25); opacity: .6;
+              animation: pcs-peek-idle 1.2s ease 10s forwards; transition: opacity .15s; }
+      .peek:hover { opacity: 1; animation: none; }
+      .peek svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      /* 10秒たつと見えなくなる(場所にカーソルを合わせれば、また出る) */
+      @keyframes pcs-peek-idle { to { opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) { .peek { animation: none; opacity: .5; } }
       .ptag { color: #fbbf24; background: rgba(251,191,36,.14); border-radius: 6px; padding: 1px 6px; font-size: 10px; font-weight: 600; white-space: nowrap; }
     </style>
     <div class="col"><div class="wrap"></div><div class="dock" hidden><div class="menu"></div></div></div>`;
@@ -217,6 +227,10 @@
   const NOTE_MS = 15000;
   const noteSeen = new Map(); // お知らせの中身 -> 出し始めた時刻
   const noteClosed = new Set(); // ✕ で閉じたお知らせ(同じ中身のままの間は、もう出さない)
+  const noteRevealed = new Set(); // 消えた後に、カーソルを合わせてもう一度出したお知らせ(離したらすぐ消す)
+  const REVEAL_LINGER_MS = 2000; // もう一度出したものは、カーソルを離してから 2秒で消す
+  // もう時間がたって消えたか、✕ で閉じたか
+  const noteHidden = (key) => noteClosed.has(key) || (noteSeen.has(key) && NOTE_MS - (Date.now() - noteSeen.get(key)) <= 0);
   let noteKeys = new Set();
   let noteNext = Infinity;
   let noteTimer = null;
@@ -259,6 +273,19 @@
       rerender();
     });
     node.appendChild(x);
+    if (auto && noteRevealed.has(key)) {
+      // カーソルを合わせて出し直したもの: カーソルが外れたら 2秒で消す。
+      // カーソルの真下に出てくるので、ブラウザが「離れた」を知らせないことがある。場所で確かめる
+      const iv = setInterval(() => {
+        if (!node.isConnected) return clearInterval(iv);
+        if (pointerOn(node)) return;
+        clearInterval(iv);
+        if (NOTE_MS - (Date.now() - noteSeen.get(key)) > REVEAL_LINGER_MS) {
+          noteSeen.set(key, Date.now() - NOTE_MS + REVEAL_LINGER_MS);
+          rerender();
+        }
+      }, 250);
+    }
     if (auto) {
       node.style.animation = `pcs-fade .5s ease ${Math.max(0, left - 500)}ms forwards`;
       noteNext = Math.min(noteNext, left);
@@ -266,7 +293,8 @@
         node.style.animation = 'none'; // 乗っている間は消さない(描き直す時にも、乗っていれば時間を数え直す)
       });
       node.addEventListener('mouseleave', () => {
-        noteSeen.set(key, Date.now()); // 離したら、そこからまた 15秒
+        // 離したら、そこからまた 15秒(カーソルを合わせて出し直したものは 2秒)
+        noteSeen.set(key, noteRevealed.has(key) ? Date.now() - NOTE_MS + REVEAL_LINGER_MS : Date.now());
         rerender();
       });
     }
@@ -276,6 +304,7 @@
     // もう出ていないお知らせは忘れる(また同じ状態になったら、もう一度出す)
     for (const k of [...noteSeen.keys()]) if (!noteKeys.has(k)) noteSeen.delete(k);
     for (const k of [...noteClosed]) if (!noteKeys.has(k)) noteClosed.delete(k);
+    for (const k of [...noteRevealed]) if (!noteKeys.has(k)) noteRevealed.delete(k);
     clearTimeout(noteTimer);
     if (noteNext !== Infinity) noteTimer = setTimeout(rerender, noteNext + 50);
   }
@@ -497,8 +526,24 @@
     } else if (room && others.length > 0) {
       // 誰が参加しているかを、自分も含めて1人ずつ(人のアイコンと名前)並べる
       const leaveLabel = room.role === 'owner' || room.role === 'self' ? T('end') : T('leave');
-      show(
-        'members:' + JSON.stringify([room.role, members.map((m) => [m.id, m.label, m.service, m.host || m.id === room.host])]),
+      const membersKey = 'members:' + JSON.stringify([room.role, members.map((m) => [m.id, m.label, m.service, m.host || m.id === room.host])]);
+      if (noteHidden(membersKey)) {
+        // 一覧は時間がたって消えた(または ✕ で閉じた)。小さな「🎧 人数」を残して、カーソルを合わせたらまた出す
+        noteKeys.add(membersKey);
+        noteRevealed.delete(membersKey);
+        const peek = el('div', { class: 'peek', title: T('listeningHeader', members.length) }, [lineIcon('headphones'), el('span', { text: String(members.length) })]);
+        // 出た直後(✕ を押した直後など、カーソルの真下に出てきた時)は反応しない。カーソルを実際に動かした時だけ出す
+        const born = Date.now();
+        peek.addEventListener('mousemove', () => {
+          if (Date.now() - born < 600 || noteRevealed.has(membersKey)) return;
+          noteClosed.delete(membersKey);
+          noteSeen.set(membersKey, Date.now());
+          noteRevealed.add(membersKey);
+          rerender();
+        });
+        wrap.appendChild(peek);
+      } else show(
+        membersKey,
         el('div', { class: 'card' }, [
           el('div', { class: 'head', title: room.role === 'owner' ? T('ownerHint') : T('guestHint') }, [
             el('span', { class: 'title', text: '🎧 ' + T('listeningHeader', members.length) }),
