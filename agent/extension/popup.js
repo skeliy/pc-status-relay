@@ -362,6 +362,15 @@
     // 歌詞オーバーレイ
     if (data.lyrics && data.lyrics.supported) {
       if (data.lyrics.running && (data.lyrics.notify || data.lyrics.notifyOld)) app.appendChild(notifySection(data.lyrics));
+      else if (data.lyrics.installed && !data.lyrics.running && !data.lyrics.installing) {
+        // アプリは入っているが動いていない: 通知のスイッチはアプリが動いている時だけ使えるので、起動のボタンを出す
+        app.appendChild(
+          section(T('notifyTitle'), [
+            el('div', { class: 'muted small', text: T('notifyNeedsApp') }),
+            el('div', { class: 'row' }, [el('button', { class: 'primary', text: T('notifyStartApp'), onclick: () => send({ type: 'lyrics-guide', mode: 'start' }) })]),
+          ])
+        );
+      }
       app.appendChild(lyricsSection(data));
     }
 
