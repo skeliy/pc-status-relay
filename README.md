@@ -232,7 +232,9 @@ https://xxxxx.onrender.com/dashboard?token=VIEW_TOKENの値
 
 ハブで「とろ の予定」を開くと、題名の横にペンのボタンが出ます。押すと「来週の水曜の5限に授業が増えた」のように変わったことを書いて送れます(`schedreq.js`)。
 
-- 送ったお願いは中継サーバーに届き、skeliy の Claude のスケジュールタスクが1時間ごとに読みに来て、予定表(claude.ai の「skeliyととろの予定」とこのハブ)を直します。
+- 送ったお願いは中継サーバーに届き、すぐに skeliy の Claude のスケジュールタスクを動かします。タスクは予定表(claude.ai の「skeliyととろの予定」とこのハブ)を直します。
+  - すぐに動かすには、claude.ai/code/routines でそのタスクを開き、「Add another trigger」→「API」でトークンを作って、URL を Render の環境変数 `ROUTINE_FIRE_URL` に、トークンを `ROUTINE_FIRE_TOKEN` に入れます。続けて送られたお願いは20秒待ってまとめ、1回動かしたら次は5分あけます。
+  - この2つが無い時は、タスクのスケジュール(1時間ごと)で読みに来ます。
 - 分からないところがあれば、Claude がペンの画面に質問を返します(ペンに赤い点が付きます)。そこで答えると、次の回に反映されます。
 - Claude が直したとろの予定表は、PC から届く `schedule.json` のとろの分より優先されます。記録は `relay_backup.json` に預けるので、サーバーが再起動しても消えません。
 - Claude 用の鍵はリポジトリに置かず、SHA-256 だけを `schedreq.js` に書いています(Render の環境変数 `CLAUDE_KEY_SHA256` でも変えられます)。

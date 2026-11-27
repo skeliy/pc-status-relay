@@ -3,7 +3,8 @@
 //  流れ:
 //   1. とろ(など)がハブのペンを押して「来週の水曜5限に授業が増えた」のように書いて送る
 //      → POST /api/sched-requests (閲覧用トークン)
-//   2. Claude(skeliy のスケジュールタスク)が1時間ごとに取りに来る
+//   2. 届いたらすぐ Claude(skeliy のスケジュールタスク)を API トリガーで動かす(ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN)。
+//      Claude が取りに来る
 //      → GET /api/claude/sched (Claude 用の鍵)
 //   3. Claude が予定表を直して、その人の予定を丸ごと送り返す → POST /api/claude/schedule-person
 //      分からないところがあれば質問を返す → POST /api/claude/sched-requests/<id> {status:"question", reply}
@@ -22,6 +23,43 @@ const MAX_KEEP = 200;                  // 覚えておくお願いの数
 const KEEP_MS = 45 * 24 * 3600 * 1000; // 45日より古いものは忘れる
 const MAX_OPEN = 20;                   // まだ片付いていないお願いの上限(いたずら対策)
 const STATUSES = ['new', 'seen', 'question', 'done', 'rejected'];
+
+// お願いが届いたら、Claude のスケジュールタスクをすぐに動かす(API トリガー)。
+// claude.ai/code/routines でそのタスクに API トリガーを足して作った URL とトークンを、Render の環境変数に入れる
+const FIRE_URL = process.env.ROUTINE_FIRE_URL || '';
+const FIRE_TOKEN = process.env.ROUTINE_FIRE_TOKEN || '';
+const FIRE_WAIT_MS = 20 * 1000;      // 続けて送られたお願いをまとめるために少し待つ
+const FIRE_GAP_MS = 5 * 60 * 1000;   // 1回動かしたら、次は5分あける(動いている途中で二重に動かさない)
+let fireTimer = null;
+let lastFireAt = 0;
+let lastFire = null;                 // {at, ok, status}
+
+function autoFire() { return !!(FIRE_URL && FIRE_TOKEN); }
+
+function scheduleFire() {
+  if (!autoFire() || fireTimer) return;
+  const wait = Math.max(FIRE_WAIT_MS, lastFireAt + FIRE_GAP_MS - Date.now());
+  fireTimer = setTimeout(doFire, wait);
+}
+
+async function doFire() {
+  fireTimer = null;
+  if (!requests.some((r) => r.status === 'new')) return;
+  lastFireAt = Date.now();
+  try {
+    const r = await fetch(FIRE_URL, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + FIRE_TOKEN, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'experimental-cc-routine-2026-04-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'ハブのペンから新しいお願いが届きました。' }),
+      signal: AbortSignal.timeout(30000),
+    });
+    lastFire = { at: lastFireAt, ok: r.ok, status: r.status };
+    if (!r.ok) console.warn('[schedreq] タスクを動かせませんでした:', r.status, (await r.text().catch(() => '')).slice(0, 300));
+  } catch (e) {
+    lastFire = { at: lastFireAt, ok: false, status: String(e && e.message || e) };
+    console.warn('[schedreq] タスクを動かせませんでした:', e && e.message);
+  }
+}
 
 let requests = [];          // {id, person, text, replyTo, at, status, reply, repliedAt}
 const personData = {};      // Claude が送ってきた、その人の予定表まるごと({tz,data,allday,range})
@@ -60,7 +98,8 @@ function create(body) {
     const q = requests.find((x) => x.id === replyTo);
     if (q && q.status === 'question') q.answered = true;
   }
-  return { ok: true, request: publicView(r) };
+  scheduleFire();
+  return { ok: true, autoFire: autoFire(), request: publicView(r) };
 }
 
 function update(id, body) {
@@ -110,7 +149,7 @@ function handle(req, res, url, h) {
     if (!h.isViewAuthorized(req, url)) { h.sendJson(res, 401, { error: 'unauthorized' }); return true; }
     if (req.method === 'GET') {
       prune();
-      h.sendJson(res, 200, { requests: requests.slice(-60).map(publicView) });
+      h.sendJson(res, 200, { autoFire: autoFire(), requests: requests.slice(-60).map(publicView) });
       return true;
     }
     if (req.method === 'POST') {
@@ -129,7 +168,7 @@ function handle(req, res, url, h) {
   if (p === '/api/claude/sched' && req.method === 'GET') {
     prune();
     const sched = h.getSchedule();
-    h.sendJson(res, 200, { now: Date.now(), requests: requests.map((r) => Object.assign(publicView(r), { answered: !!r.answered })), schedule: mergeSchedule(sched.schedule), pcScheduleAt: sched.updatedAt, personAt });
+    h.sendJson(res, 200, { now: Date.now(), requests: requests.map((r) => Object.assign(publicView(r), { answered: !!r.answered })), schedule: mergeSchedule(sched.schedule), pcScheduleAt: sched.updatedAt, personAt, lastFire });
     return true;
   }
   const m = p.match(/^\/api\/claude\/sched-requests\/([0-9a-f]{12})$/);

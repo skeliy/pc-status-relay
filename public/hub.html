@@ -211,7 +211,7 @@ h2 .seg{margin-left:auto}
 <div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
   <div class="sheet-card">
     <div class="sheet-head"><b id="sheetTitle">予定の変更を送る</b><button type="button" id="sheetClose" aria-label="閉じる">×</button></div>
-    <p class="sheet-help">変わったことをそのまま書いてください。例：「来週の水曜の5限に授業が増えた」「明日の授業は全部なくなった」「明日の授業のあとご飯に行く」。Claude が1時間以内に予定表に反映します。分からないところがあれば、ここに質問が出ます。</p>
+    <p class="sheet-help">変わったことをそのまま書いてください。例：「来週の水曜の5限に授業が増えた」「明日の授業は全部なくなった」「明日の授業のあとご飯に行く」。<span id="reqWhen">送ると Claude が1時間以内に予定表に反映します。</span>分からないところがあれば、ここに質問が出ます。</p>
     <textarea id="reqText" aria-label="予定の変更" maxlength="500" placeholder="例：来週の水曜の5限に授業が増えた"></textarea>
     <div class="sheet-row"><span class="msg" id="reqMsg" aria-live="polite"></span><button type="button" class="primary" id="reqSend">送る</button></div>
     <div class="reqs" id="reqList"></div>
@@ -466,8 +466,8 @@ async function pollWeek(){ try { weeks = await get('/api/week'); renderWeek(); }
 async function pollSched(){ try { const d = await get('/api/schedule'); const first = !sched && d.schedule; sched = d.schedule; schedAt = d.updatedAt; buildPeople(); renderNow(); renderCal(); if (first) scrollToNow(); } catch (e) {} }
 
 /* ---------- 予定の変更のお願い(ペン) ---------- */
-// 書いたお願いは中継サーバーに届き、Claude が1時間ごとに読んで予定表を直す。分からない時はここに質問が返ってくる
-let reqs = [];
+// 書いたお願いは中継サーバーに届き、すぐに Claude のタスクが動いて予定表を直す。分からない時はここに質問が返ってくる
+let reqs = []; let autoFire = false;
 const ST = { new:['wait','反映待ち'], seen:['wait','確認中'], question:['q','質問があります'], done:['ok','反映しました'], rejected:['ng','できませんでした'] };
 const whenReq = (ms) => { const L = absToLocal(tz, ms); return md(L.date)+' '+hm(L.min); };
 function openQuestions(k){ return reqs.filter((r) => r.person===k && r.status==='question' && !reqs.some((x) => x.replyTo===r.id)); }
@@ -476,6 +476,7 @@ function renderReqs(){
   renderPenBadge();
   if ($('sheet').hidden) return;
   $('sheetTitle').textContent = (NAME[who] || who) + ' の予定の変更を送る';
+  $('reqWhen').textContent = autoFire ? '送るとすぐ Claude に届き、数分で予定表に反映します。' : '送ると Claude が1時間以内に予定表に反映します。';
   const mine = reqs.filter((r) => r.person===who);
   const tops = mine.filter((r) => !r.replyTo || !mine.some((x) => x.id===r.replyTo)).sort((a,b) => b.at-a.at).slice(0,8);
   const kids = (id) => mine.filter((r) => r.replyTo===id).sort((a,b) => a.at-b.at);
@@ -490,7 +491,7 @@ function renderReqs(){
     const id = b.dataset.ansbtn; const ta = document.querySelector('[data-ans="'+id+'"]'); const msg = document.querySelector('[data-ansmsg="'+id+'"]');
     sendReq(ta.value, id, b, msg, () => { ta.value = ''; }); });
 }
-async function pollReqs(){ try { const d = await get('/api/sched-requests'); reqs = d.requests || []; renderReqs(); } catch (e) {} }
+async function pollReqs(){ try { const d = await get('/api/sched-requests'); reqs = d.requests || []; autoFire = !!d.autoFire; renderReqs(); } catch (e) {} }
 async function sendReq(text, replyTo, btn, msg, done){
   text = String(text || '').trim();
   if (!text) { msg.className = 'msg err'; msg.textContent = '何か書いてから送ってください。'; return; }
@@ -501,7 +502,7 @@ async function sendReq(text, replyTo, btn, msg, done){
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error === 'too-many' ? 'まだ反映していないお願いが多すぎます。少し待ってから送ってください。' : '送れませんでした（'+(d.error || r.status)+'）。');
     if (done) done();
-    msg.textContent = '送りました。1時間以内に反映します。';
+    msg.textContent = d.autoFire ? '送りました。数分で反映します。' : '送りました。1時間以内に反映します。';
     await pollReqs();
   } catch (e) { msg.className = 'msg err'; msg.textContent = e.message || '送れませんでした。'; }
   btn.disabled = false;
