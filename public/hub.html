@@ -97,6 +97,40 @@ h2 .seg{margin-left:auto}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
 .nocal{padding:18px;color:var(--muted);font-size:13px}
 
+/* 予定の変更のお願い(とろ の予定の横のペン) */
+.pen{position:relative;width:32px;height:32px;border-radius:50%;display:inline-grid;place-items:center;color:var(--muted);border:1px solid var(--line)}
+.pen:hover{background:var(--chip);color:var(--ink)}
+.pen svg{width:16px;height:16px}
+.pen .badge{position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;background:var(--nowline);border:2px solid var(--bg)}
+.sheet{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px 12px;overflow-y:auto}
+.sheet[hidden]{display:none}
+.sheet-card{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:16px;width:100%;max-width:520px;padding:16px 16px 12px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.sheet-head{display:flex;align-items:center;gap:8px}
+.sheet-head b{font-size:16px;flex:1}
+.sheet-head button{width:36px;height:36px;border-radius:50%;font-size:22px;color:var(--muted)}
+.sheet-head button:hover{background:var(--chip)}
+.sheet-help{font-size:12.5px;color:var(--muted);margin:6px 0 10px}
+.sheet textarea{width:100%;font:inherit;font-size:16px;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;resize:vertical;min-height:72px}
+.sheet textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+.sheet-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.sheet-row .msg{flex:1;font-size:12.5px;color:var(--muted)}
+.sheet-row .msg.err{color:var(--nowline)}
+.primary{background:var(--accent);color:var(--on-accent);font-weight:700;border-radius:999px;padding:8px 18px;min-height:40px}
+.primary:disabled{opacity:.5;cursor:default}
+.reqs{margin-top:14px;border-top:1px solid var(--line)}
+.reqs h3{font-size:12.5px;color:var(--muted);font-weight:500;margin:10px 0 4px}
+.rq{padding:10px 0;border-bottom:1px dashed var(--line)}
+.rq:last-child{border-bottom:0}
+.rq .t{white-space:pre-wrap;overflow-wrap:anywhere}
+.rq .meta{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);margin-top:4px}
+.chip{font-size:11px;border-radius:999px;padding:1px 8px;border:1px solid currentColor;white-space:nowrap}
+.chip.wait{color:var(--muted)} .chip.q{color:var(--nowline)} .chip.ok{color:var(--online)} .chip.ng{color:var(--afk)}
+.rq .rep{margin-top:6px;padding:8px 10px;border-radius:10px;background:var(--chip);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.rq .rep::before{content:"Claude: ";font-weight:700}
+.rq .ans{margin:6px 0 0 14px;padding-left:10px;border-left:2px solid var(--line)}
+.rq .ansbox{margin-top:8px}
+.rq .ansbox textarea{min-height:52px}
+
 /* 今週の使い方 */
 .week{border:1px solid var(--line);border-radius:14px;padding:12px 14px}
 .week .sum{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap}
@@ -141,7 +175,9 @@ h2 .seg{margin-left:auto}
 
   <div class="now" id="now" aria-live="polite"></div>
 
-  <h2 id="calTitle">予定</h2>
+  <h2><span id="calTitle">予定</span>
+    <button type="button" class="pen" id="pen" hidden aria-label="予定の変更を送る" title="予定の変更を送る"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span class="badge" id="penBadge" hidden></span></button>
+  </h2>
   <div class="cal">
     <div class="bar">
       <button type="button" class="today" id="goToday">今日</button>
@@ -170,6 +206,16 @@ h2 .seg{margin-left:auto}
   <div class="week" id="week"></div>
 
   <div class="foot">上のカードを押すと、その人の予定と使い方に切り替わります</div>
+</div>
+
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="sheet-card">
+    <div class="sheet-head"><b id="sheetTitle">予定の変更を送る</b><button type="button" id="sheetClose" aria-label="閉じる">×</button></div>
+    <p class="sheet-help">変わったことをそのまま書いてください。例：「来週の水曜の5限に授業が増えた」「明日の授業は全部なくなった」「明日の授業のあとご飯に行く」。Claude が1時間以内に予定表に反映します。分からないところがあれば、ここに質問が出ます。</p>
+    <textarea id="reqText" aria-label="予定の変更" maxlength="500" placeholder="例：来週の水曜の5限に授業が増えた"></textarea>
+    <div class="sheet-row"><span class="msg" id="reqMsg" aria-live="polite"></span><button type="button" class="primary" id="reqSend">送る</button></div>
+    <div class="reqs" id="reqList"></div>
+  </div>
 </div>
 
 <script>
@@ -267,6 +313,7 @@ const openApps = new Set();
 // 中継サーバーの PC(pc1 など)と、予定表の人(skeliy / toro)を名前で結び付ける
 function personOf(label){ const s = String(label || '').toLowerCase(); if (s.includes('skeliy')) return 'skeliy'; if (s.includes('toro') || s.includes('とろ')) return 'toro'; return null; }
 const NAME = { skeliy: 'skeliy', toro: 'とろ' };
+const REQ_PEOPLE = ['toro']; // ペンで予定の変更を送れる人
 
 /* ---------- 予定表 ---------- */
 const CAT = {class:'授業',test:'テスト',study:'勉強',gym:'筋トレ',meal:'ご飯',busy:'用事',move:'移動',brk:'休み時間',free:'自由時間',sleep:'睡眠'};
@@ -307,6 +354,7 @@ function dayView(ds){
 function renderCal(){
   document.querySelectorAll('[data-n]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.n===n)));
   $('calTitle').textContent = (NAME[who] || who) + ' の予定';
+  $('pen').hidden = !REQ_PEOPLE.includes(who);
   if (!P[who]) {
     $('range').textContent = '';
     $('calBody').innerHTML = '<div class="nocal">'+(sched ? 'この人の予定表はありません。' : '予定表はまだ届いていません（skeliy の PC から数分で届きます）。')+'</div>';
@@ -332,7 +380,9 @@ function renderCal(){
     if (d===today.date) html += '<div class="nowline" style="top:'+(today.min/60*H)+'px"></div>';
     html += '</div>'; });
   $('grid').innerHTML = html;
-  $('legend').innerHTML = (LEGEND[who]||[]).map((k) => '<span><i style="background:'+colorOf(k)+'"></i>'+CAT[k]+'</span>').join('')+(who==='toro'?'<span>授業の前後30分は移動です</span>':'')+'<span>予定は目安です</span>';
+  const shown = new Set(); info.forEach((V) => V.segs.forEach((x) => shown.add(x.c)));
+  const keys = (LEGEND[who]||[]).concat(Object.keys(CAT).filter((k) => shown.has(k) && !(LEGEND[who]||[]).includes(k)));
+  $('legend').innerHTML = keys.map((k) => '<span><i style="background:'+colorOf(k)+'"></i>'+CAT[k]+'</span>').join('')+(who==='toro'?'<span>授業の前後30分は移動です</span>':'')+'<span>予定は目安です</span>';
 }
 function scrollToNow(){ const sc=$('scroll'); if (!sc) return; const H=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hour')); const t=absToLocal(tz,Date.now()).min; sc.scrollTop=Math.max(0,t/60*H-H*2); }
 
@@ -404,7 +454,7 @@ function renderWeek(){
 /* ---------- まとめて描く ---------- */
 function renderAll(){
   document.querySelectorAll('[data-tz]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tz===tz)));
-  renderNow(); renderCal(); renderWeek();
+  renderNow(); renderCal(); renderWeek(); if (typeof renderPenBadge === 'function') renderPenBadge();
   $('upd').textContent = status ? new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})+' 更新' : '読み込み中…';
 }
 async function get(path){
@@ -414,6 +464,56 @@ async function get(path){
 async function pollStatus(){ try { status = await get('/api/status'); renderNow(); $('upd').textContent = new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})+' 更新'; } catch (e) { $('upd').textContent = 'サーバーに繋がりません（再試行中）'; } }
 async function pollWeek(){ try { weeks = await get('/api/week'); renderWeek(); } catch (e) {} }
 async function pollSched(){ try { const d = await get('/api/schedule'); const first = !sched && d.schedule; sched = d.schedule; schedAt = d.updatedAt; buildPeople(); renderNow(); renderCal(); if (first) scrollToNow(); } catch (e) {} }
+
+/* ---------- 予定の変更のお願い(ペン) ---------- */
+// 書いたお願いは中継サーバーに届き、Claude が1時間ごとに読んで予定表を直す。分からない時はここに質問が返ってくる
+let reqs = [];
+const ST = { new:['wait','反映待ち'], seen:['wait','確認中'], question:['q','質問があります'], done:['ok','反映しました'], rejected:['ng','できませんでした'] };
+const whenReq = (ms) => { const L = absToLocal(tz, ms); return md(L.date)+' '+hm(L.min); };
+function openQuestions(k){ return reqs.filter((r) => r.person===k && r.status==='question' && !reqs.some((x) => x.replyTo===r.id)); }
+function renderPenBadge(){ $('penBadge').hidden = !(REQ_PEOPLE.includes(who) && openQuestions(who).length); }
+function renderReqs(){
+  renderPenBadge();
+  if ($('sheet').hidden) return;
+  $('sheetTitle').textContent = (NAME[who] || who) + ' の予定の変更を送る';
+  const mine = reqs.filter((r) => r.person===who);
+  const tops = mine.filter((r) => !r.replyTo || !mine.some((x) => x.id===r.replyTo)).sort((a,b) => b.at-a.at).slice(0,8);
+  const kids = (id) => mine.filter((r) => r.replyTo===id).sort((a,b) => a.at-b.at);
+  const item = (r) => { const open = r.status==='question' && !mine.some((x) => x.replyTo===r.id); const st = r.status==='question' && !open ? ['wait','答えました'] : (ST[r.status] || ST.new);
+    let h = '<div class="t">'+esc(r.text)+'</div><div class="meta"><span>'+esc(whenReq(r.at))+'</span><span class="chip '+st[0]+'">'+st[1]+'</span></div>';
+    if (r.reply) h += '<div class="rep">'+esc(r.reply)+'</div>';
+    if (open) h += '<div class="ansbox"><textarea data-ans="'+esc(r.id)+'" maxlength="500" placeholder="ここに答えを書く"></textarea><div class="sheet-row"><span class="msg" data-ansmsg="'+esc(r.id)+'"></span><button type="button" class="primary" data-ansbtn="'+esc(r.id)+'">答える</button></div></div>';
+    return h; };
+  const walk = (r) => '<div class="ans">'+item(r)+kids(r.id).map(walk).join('')+'</div>';
+  $('reqList').innerHTML = tops.length ? '<h3>これまでに送ったもの</h3>'+tops.map((r) => '<div class="rq">'+item(r)+kids(r.id).map(walk).join('')+'</div>').join('') : '';
+  document.querySelectorAll('[data-ansbtn]').forEach((b) => b.onclick = () => {
+    const id = b.dataset.ansbtn; const ta = document.querySelector('[data-ans="'+id+'"]'); const msg = document.querySelector('[data-ansmsg="'+id+'"]');
+    sendReq(ta.value, id, b, msg, () => { ta.value = ''; }); });
+}
+async function pollReqs(){ try { const d = await get('/api/sched-requests'); reqs = d.requests || []; renderReqs(); } catch (e) {} }
+async function sendReq(text, replyTo, btn, msg, done){
+  text = String(text || '').trim();
+  if (!text) { msg.className = 'msg err'; msg.textContent = '何か書いてから送ってください。'; return; }
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '送っています…';
+  try {
+    const u = new URL('/api/sched-requests', location.origin); if (TOKEN) u.searchParams.set('token', TOKEN);
+    const r = await fetch(u.toString(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ person: who, text, replyTo: replyTo || null }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error === 'too-many' ? 'まだ反映していないお願いが多すぎます。少し待ってから送ってください。' : '送れませんでした（'+(d.error || r.status)+'）。');
+    if (done) done();
+    msg.textContent = '送りました。1時間以内に反映します。';
+    await pollReqs();
+  } catch (e) { msg.className = 'msg err'; msg.textContent = e.message || '送れませんでした。'; }
+  btn.disabled = false;
+}
+let lastFocus = null;
+function openSheet(){ lastFocus = document.activeElement; $('sheet').hidden = false; $('reqMsg').textContent = ''; renderReqs(); pollReqs(); setTimeout(() => $('reqText').focus(), 0); }
+function closeSheet(){ $('sheet').hidden = true; if (lastFocus) lastFocus.focus(); }
+$('pen').onclick = openSheet;
+$('sheetClose').onclick = closeSheet;
+$('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) closeSheet(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('sheet').hidden) closeSheet(); });
+$('reqSend').onclick = () => sendReq($('reqText').value, null, $('reqSend'), $('reqMsg'), () => { $('reqText').value = ''; });
 
 document.querySelectorAll('[data-tz]').forEach((b) => b.onclick = () => { tz = b.dataset.tz; store.set('hub-tz', tz); start = null; renderAll(); scrollToNow(); });
 document.querySelectorAll('[data-n]').forEach((b) => b.onclick = () => { n = +b.dataset.n; store.set('hub-n', n); start = null; renderCal(); });
@@ -428,6 +528,8 @@ Promise.all([pollStatus(), pollWeek(), pollSched()]).then(() => { renderAll(); s
 setInterval(pollStatus, 5000);
 setInterval(pollWeek, 60000);
 setInterval(pollSched, 300000);
+pollReqs();
+setInterval(pollReqs, 60000);
 setInterval(() => { renderNow(); renderCal(); }, 60000);
 })();
 </script>

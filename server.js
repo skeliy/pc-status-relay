@@ -54,6 +54,7 @@ const rooms = require('./rooms');
 // Listen Together アプリ(通話・ゲームの通知)と、Discord の通話の見張り
 const companions = require('./companions');
 const backup = require('./backup');
+const schedreq = require('./schedreq');
 
 const PORT = process.env.PORT || 3000;
 const WRITE_TOKEN = process.env.WRITE_TOKEN || '';
@@ -646,7 +647,7 @@ const server = http.createServer((req, res) => {
       sendJson(res, 401, { error: 'unauthorized' });
       return;
     }
-    sendJson(res, 200, { schedule: scheduleData, updatedAt: scheduleAt || null });
+    sendJson(res, 200, { schedule: schedreq.mergeSchedule(scheduleData), updatedAt: scheduleAt || null });
     return;
   }
 
@@ -777,6 +778,10 @@ const server = http.createServer((req, res) => {
   // 曲の共有の「部屋」と、Discord から来た人用の参加ページ(rooms.js)
   const sendFile = (r, name) =>
     fs.readFile(path.join(__dirname, 'public', name), 'utf8', (err, html) => (err ? sendPlain(r, 500, 'not found') : sendHtml(r, 200, html)));
+  // 予定の変更のお願い(ハブのペン)と、Claude からの返事(schedreq.js)
+  if (schedreq.handle(req, res, parsedUrl, { sendJson, readJsonBody, isViewAuthorized, getSchedule: () => ({ schedule: scheduleData, updatedAt: scheduleAt || null }) })) {
+    return;
+  }
   if (backup.handle(req, res, parsedUrl, { sendJson, readJsonBody, isWriteAuthorized })) {
     return;
   }

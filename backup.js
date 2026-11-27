@@ -5,6 +5,7 @@
 //  預けるもの:
 //   - 部屋ごとの「前に一緒に聴いたことのある人」の記録と、最後のホストの名前
 //   - Listen Together アプリを入れた人の一覧(名前、だれなのかの割り当て、いつ入れたか)
+//   - 予定の変更のお願い(ハブのペン)と、Claude が直した予定表(schedreq.js)
 //  暗号の鍵は OWNER_TOKEN から作るので、控えのファイルを見ても中身は読めない。
 //  OWNER_TOKEN が設定されていない時は、この仕組みは使わない。
 'use strict';
@@ -12,6 +13,7 @@
 const crypto = require('crypto');
 const rooms = require('./rooms');
 const companions = require('./companions');
+const schedreq = require('./schedreq');
 
 const OWNER_TOKEN = process.env.OWNER_TOKEN || '';
 const KEY = OWNER_TOKEN ? crypto.createHash('sha256').update('pc-status-relay-backup:' + OWNER_TOKEN).digest() : null;
@@ -42,7 +44,7 @@ function open(blob) {
 }
 
 function current() {
-  return { v: 1, at: Date.now(), rooms: rooms.snapshot(), companions: companions.snapshot() };
+  return { v: 1, at: Date.now(), rooms: rooms.snapshot(), companions: companions.snapshot(), schedreq: schedreq.snapshot() };
 }
 
 // GET: 今の控えを渡す。まだ受け取っていない間は、空っぽの控えで上書きされないように渡さない
@@ -66,6 +68,7 @@ function restore(blob) {
   }
   rooms.restore(data && data.rooms);
   const n = companions.restore(data && data.companions);
+  schedreq.restore(data && data.schedreq);
   restored = true;
   restoredAt = Date.now();
   return { ok: true, restored: true, companions: n, savedAt: data && data.at };
